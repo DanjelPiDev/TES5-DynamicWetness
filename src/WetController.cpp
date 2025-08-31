@@ -5,9 +5,6 @@
 
 #include "Settings.h"
 
-#include "RE/B/BSLightingShaderProperty.h"
-#include "RE/N/NiNode.h"
-
 using namespace std::chrono_literals;
 
 namespace SWE {
@@ -85,6 +82,14 @@ namespace SWE {
         }
 
         return s >= minSub;
+    }
+    static inline bool NameHas(const RE::NiAVObject* o, std::string_view s) {
+        if (!o) return false;
+        std::string n = o->name.c_str();
+        std::transform(n.begin(), n.end(), n.begin(), [](unsigned char c) { return std::tolower(c); });
+        std::string t(s);
+        std::transform(t.begin(), t.end(), t.begin(), [](unsigned char c) { return std::tolower(c); });
+        return n.find(t) != std::string::npos;
     }
     static RE::BSLightingShaderProperty* FindLightingProp(RE::BSGeometry* g) {
         if (!g) return nullptr;
