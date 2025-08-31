@@ -8,7 +8,7 @@
 using namespace std::chrono_literals;
 
 namespace SWE {
-
+    enum class MatCat { SkinFace, Hair, ArmorClothing, Weapon, Other };
     static inline float clampf(float v, float lo, float hi) { return (v < lo) ? lo : (v > hi) ? hi : v; }
 
     static void ForEachGeometry(RE::NiAVObject* obj, const std::function<void(RE::BSGeometry*)>& fn) {
@@ -90,6 +90,50 @@ namespace SWE {
         std::string t(s);
         std::transform(t.begin(), t.end(), t.begin(), [](unsigned char c) { return std::tolower(c); });
         return n.find(t) != std::string::npos;
+    }
+    static MatCat ClassifyGeom(RE::BSGeometry* g, RE::BSLightingShaderProperty*) {
+        if (g) {
+            auto& grt = g->GetGeometryRuntimeData();
+            if (auto* si = grt.skinInstance.get()) {
+                if (auto* dsi = netimmerse_cast<RE::BSDismemberSkinInstance*>(si)) {
+                    const auto& rd = dsi->GetRuntimeData();
+                    for (int i = 0; i < rd.numPartitions; ++i) {
+                        const std::uint16_t slot = rd.partitions[i].slot;
+                        switch (slot) {
+                            case 30:
+                                return MatCat::SkinFace;
+                            case 31:
+                                return MatCat::Hair;
+                            case 41:
+                                return MatCat::Weapon;
+                            case 32:
+                            case 33:
+                            case 34:
+                            case 35:
+                            case 36:
+                            case 37:
+                            case 38:
+                            case 39:
+                            case 40:
+                                return MatCat::ArmorClothing;
+                            default:
+                                break;
+                        }
+                    }
+                }
+            }
+        }
+
+        const RE::NiAVObject* cur = g;
+        for (int i = 0; i < 4 && cur; ++i) {
+            if (NameHas(cur, "hair")) return MatCat::Hair;
+            if (NameHas(cur, "head") || NameHas(cur, "face")) return MatCat::SkinFace;
+            if (NameHas(cur, "weapon") || NameHas(cur, "sword") || NameHas(cur, "bow") || NameHas(cur, "dagger"))
+                return MatCat::Weapon;
+            cur = cur->parent;
+        }
+
+        return MatCat::ArmorClothing;
     }
     static RE::BSLightingShaderProperty* FindLightingProp(RE::BSGeometry* g) {
         if (!g) return nullptr;
@@ -296,7 +340,15 @@ namespace SWE {
             auto* lsp = FindLightingProp(g);
             if (!lsp) return;
 
-            auto* mat = skyrim_cast<RE::BSLightingShaderMaterialBase*>(lsp->material);
+            const MatCat cat = ClassifyGeom(g, lsp);
+            if ((cat == MatCat::SkinFace && !Settings::affectSkin.load()) ||
+                (cat == MatCat::Hair && !Settings::affectHair.load()) ||
+                (cat == MatCat::ArmorClothing && !Settings::affectArmor.load()) ||
+                (cat == MatCat::Weapon && !Settings::affectWeapons.load())) {
+                return;
+            }
+
+            auto* mat = static_cast<RE::BSLightingShaderMaterialBase*>(lsp->material);
             if (!mat) return;
 
             auto it = _matCache.find(lsp);
