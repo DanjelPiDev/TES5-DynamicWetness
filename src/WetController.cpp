@@ -11,7 +11,15 @@ namespace SWE {
     enum class MatCat { SkinFace, Hair, ArmorClothing, Weapon, Other };
     static inline float clampf(float v, float lo, float hi) { return (v < lo) ? lo : (v > hi) ? hi : v; }
 
+    static inline void SetSpecularEnabled(RE::BSShaderProperty* sp, bool on) {
+        if (!sp) return;
+        if (on)
+            sp->flags.set(RE::BSShaderProperty::EShaderPropertyFlag::kSpecular);
+        else
+            sp->flags.reset(RE::BSShaderProperty::EShaderPropertyFlag::kSpecular);
 
+        sp->SetFlags(RE::BSShaderProperty::EShaderPropertyFlag8::kSpecular, on);
+    }
     static inline bool NameHas(const RE::NiAVObject* o, std::string_view s) {
         if (!o) return false;
         std::string n = o->name.c_str();
@@ -410,30 +418,51 @@ namespace SWE {
 
             auto it = _matCache.find(lsp);
             if (it == _matCache.end()) {
-                _matCache.emplace(
-                    lsp, MatSnapshot{
-                             mat->materialAlpha, mat->specularPower,
-                             mat->specularColorScale, mat->specularColor.red, mat->specularColor.green,
-                             mat->specularColor.blue});
+                bool hadSpec = false;
+                if (auto* sp0 = static_cast<RE::BSShaderProperty*>(lsp)) {
+                    hadSpec = sp0->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kSpecular);
+                }
+                _matCache.emplace(lsp, MatSnapshot{.baseAlpha = mat->materialAlpha,
+                                                   .baseSpecularPower = mat->specularPower,
+                                                   .baseSpecularScale = mat->specularColorScale,
+                                                   .baseSpecR = mat->specularColor.red,
+                                                   .baseSpecG = mat->specularColor.green,
+                                                   .baseSpecB = mat->specularColor.blue,
+                                                   .hadSpecular = hadSpec});
                 it = _matCache.find(lsp);
             }
             const MatSnapshot& base = it->second;
 
             auto* sp = static_cast<RE::BSShaderProperty*>(lsp);
-            if (sp) {
-                if (!sp->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kSpecular)) {
-                    sp->flags.set(RE::BSShaderProperty::EShaderPropertyFlag::kSpecular);
-                    sp->SetFlags(RE::BSShaderProperty::EShaderPropertyFlag8::kSpecular, true);
+            if (wet <= 0.0005f) {
+                if (sp) {
+                    SetSpecularEnabled(sp, base.hadSpecular);
                 }
+                mat->materialAlpha = base.baseAlpha;
+                mat->specularPower = base.baseSpecularPower;
+                mat->specularColorScale = base.baseSpecularScale;
+                mat->specularColor = {base.baseSpecR, base.baseSpecG, base.baseSpecB};
+
+                sp->SetMaterial(mat, true);
+                lsp->DoClearRenderPasses();
+                (void)lsp->SetupGeometry(g);
+                (void)lsp->FinishSetupGeometry(g);
+                propsTouched;
+                return;
             }
 
+            if (sp) {
+                SetSpecularEnabled(sp, true);
+            }
             RE::NiColor newSpec{base.baseSpecR, base.baseSpecG, base.baseSpecB};
             if ((newSpec.red + newSpec.green + newSpec.blue) < 0.05f) {
                 newSpec = {0.7f, 0.7f, 0.7f};
             }
-            const float newGloss = std::clamp(base.baseSpecularPower + wet * glBoost, minGloss, maxGloss);
-            const float baseScale = std::max(0.0f, base.baseSpecularScale);
-            const float newScale = std::clamp(baseScale * (1.0f + wet * scBoost), minSpec, maxSpec);
+            float newGloss = base.baseSpecularPower + wet * glBoost;
+            newGloss = std::clamp(newGloss, minGloss, maxGloss);
+
+            float newScale = base.baseSpecularScale + wet * scBoost;
+            newScale = std::clamp(newScale, minSpec, maxSpec);
 
             mat->specularPower = newGloss;
             mat->specularColor = newSpec;

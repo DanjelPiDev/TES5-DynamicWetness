@@ -63,6 +63,7 @@ namespace SWE {
             float baseSpecularPower{20.f};
             float baseSpecularScale{1.f};
             float baseSpecR{1.f}, baseSpecG{1.f}, baseSpecB{1.f};
+            bool hadSpecular{false};
         };
         std::unordered_map<const RE::BSLightingShaderProperty*, MatSnapshot> _matCache;
         friend class DebugAccess;
