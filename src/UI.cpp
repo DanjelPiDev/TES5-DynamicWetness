@@ -14,7 +14,7 @@ void UI::Register() {
     if (g_registered.load()) return;
     if (!SKSEMenuFramework::IsInstalled()) return;
 
-    SKSEMenuFramework::SetSection("Skyrim Wet Effect");
+    SKSEMenuFramework::SetSection("Dynamic Wetness");
     SKSEMenuFramework::AddSectionItem("General", UI::WetConfig::RenderGeneral);
     SKSEMenuFramework::AddSectionItem("Sources & Timings", UI::WetConfig::RenderSources);
     SKSEMenuFramework::AddSectionItem("Materials", UI::WetConfig::RenderMaterials);
@@ -25,7 +25,7 @@ void UI::Register() {
 
 void __stdcall UI::WetConfig::RenderGeneral() {
     FontAwesome::PushSolid();
-    if (ImGui::CollapsingHeader(generalHeader.c_str())) {
+    if (ImGui::CollapsingHeader(generalHeader.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
         bool en = Settings::modEnabled.load();
         if (ImGui::Checkbox("Enable Mod", &en)) Settings::modEnabled.store(en);
 
@@ -52,7 +52,7 @@ void __stdcall UI::WetConfig::RenderGeneral() {
 
 void __stdcall UI::WetConfig::RenderSources() {
     FontAwesome::PushSolid();
-    if (ImGui::CollapsingHeader(sourcesHeader.c_str())) {
+    if (ImGui::CollapsingHeader(sourcesHeader.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
         bool rs = Settings::rainSnowEnabled.load();
         if (ImGui::Checkbox("Enable rain/snow wetting", &rs)) Settings::rainSnowEnabled.store(rs);
 
@@ -93,7 +93,7 @@ void __stdcall UI::WetConfig::RenderSources() {
 
 void __stdcall UI::WetConfig::RenderMaterials() {
     FontAwesome::PushSolid();
-    if (ImGui::CollapsingHeader(materialsHeader.c_str())) {
+    if (ImGui::CollapsingHeader(materialsHeader.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
         bool s = Settings::affectSkin.load();
         if (ImGui::Checkbox("Affect Skin/Face", &s)) Settings::affectSkin.store(s);
         bool h = Settings::affectHair.load();
@@ -134,7 +134,7 @@ void __stdcall UI::WetConfig::RenderMaterials() {
 
 void __stdcall UI::WetConfig::RenderNPCs() {
     FontAwesome::PushSolid();
-    if (ImGui::CollapsingHeader(npcsHeader.c_str())) {
+    if (ImGui::CollapsingHeader(npcsHeader.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
         bool en = Settings::affectNPCs.load();
         if (ImGui::Checkbox("Affect NPCs", &en)) Settings::affectNPCs.store(en);
 
