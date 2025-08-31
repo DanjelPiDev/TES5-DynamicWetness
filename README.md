@@ -1,5 +1,7 @@
 # Skyrim Wet Effect
 
+> [![Download Latest Release](https://img.shields.io/github/v/release/DanjelPiDev/TES5-DynamicWetness)](https://github.com/DanjelPiDev/TES5-DynamicWetness/releases/latest)
+
 A lightweight SKSE plugin that makes characters appear **wet** when exposed to water, rain, or snow.  
 Unlike script-based approaches, this is a pure DLL implementation with smooth transitions, no save bloat, and full configuration support.
 
