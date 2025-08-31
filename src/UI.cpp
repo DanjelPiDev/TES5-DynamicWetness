@@ -75,6 +75,11 @@ void __stdcall UI::WetConfig::RenderSources() {
         if (ImGui::SliderFloat("Seconds to dry", &d, 2.0f, 3600.0f, "%.1f")) {
             Settings::secondsToDry.store(d);
         }
+        ImGui::Separator();
+        float ms = Settings::minSubmergeToSoak.load();
+        if (ImGui::SliderFloat("Min water depth to start soaking (0..1)", &ms, 0.0f, 0.8f, "%.2f")) {
+            Settings::minSubmergeToSoak.store(ms);
+        }
 
         ImGui::Separator();
         FontAwesome::PushSolid();

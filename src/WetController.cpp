@@ -26,7 +26,31 @@ namespace SWE {
             }
         }
     }
+    static inline float EstimateSubmerge(RE::Actor* a) {
+        // TODO: improve with raycast? Not working properly for now.
+        if (!a) return 0.0f;
 
+        const auto& rd = a->GetActorRuntimeData();
+        if (rd.boolFlags.any(RE::Actor::BOOL_FLAGS::kUnderwater)) return 1.0f;
+
+        if (!(rd.boolBits.any(RE::Actor::BOOL_BITS::kInWater) || a->IsInWater())) return 0.0f;
+
+        auto* root = a->Get3D();
+        if (!root) {
+            return rd.boolBits.any(RE::Actor::BOOL_BITS::kSwimming) ? 0.5f : 0.05f;
+        }
+
+        const auto& wb = root->worldBound;
+        const float minZ = wb.center.z - wb.radius;
+        const float maxZ = wb.center.z + wb.radius;
+
+        float waterZ = a->GetPosition().z;
+
+        if (waterZ <= minZ) return 0.0f;
+        if (waterZ >= maxZ) return 1.0f;
+        const float h = std::max(0.0001f, (maxZ - minZ));
+        return std::clamp((waterZ - minZ) / h, 0.0f, 1.0f);
+    }
     static inline bool IsActorSwimming(const RE::Actor* a) {
         if (!a) return false;
         return a->GetActorRuntimeData().boolBits.any(RE::Actor::BOOL_BITS::kSwimming);
@@ -42,13 +66,25 @@ namespace SWE {
 
         if (a->IsInWater()) return true;
 
-        if (rd.boolBits.any(RE::Actor::BOOL_BITS::kSwimming)) return true;
-        if (rd.boolBits.any(RE::Actor::BOOL_BITS::kInWater)) return true;
         if (rd.boolFlags.any(RE::Actor::BOOL_FLAGS::kUnderwater)) return true;
 
-        if (rd.underWaterTimer > 0.0f) return true;
+        if (!(a->IsInWater() || rd.boolBits.any(RE::Actor::BOOL_BITS::kInWater) ||
+              rd.boolBits.any(RE::Actor::BOOL_BITS::kSwimming))) {
+            return false;
+        }
 
-        return false;
+        const float minSub = std::clamp(Settings::minSubmergeToSoak.load(), 0.0f, 0.99f);
+        if (minSub <= 0.0001f) {
+            return true;
+        }
+
+        float s = EstimateSubmerge(a);
+
+        if (rd.boolBits.any(RE::Actor::BOOL_BITS::kSwimming)) {
+            s = std::max(s, 0.5f);
+        }
+
+        return s >= minSub;
     }
     static RE::BSLightingShaderProperty* FindLightingProp(RE::BSGeometry* g) {
         if (!g) return nullptr;
@@ -307,9 +343,6 @@ namespace SWE {
 
         static auto lastToast = std::chrono::steady_clock::now();
         if (a->IsPlayerRef() && std::chrono::steady_clock::now() - lastToast > 1s) {
-            RE::DebugNotification((std::string("SWE touched ") + std::to_string(propsTouched) + " props / " +
-                                   std::to_string(geomsTouched) + " geoms")
-                                      .c_str());
             lastToast = std::chrono::steady_clock::now();
         }
     }

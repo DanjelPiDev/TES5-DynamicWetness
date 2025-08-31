@@ -12,12 +12,12 @@ using nlohmann::json;
 namespace Settings {
 
     std::atomic<bool> modEnabled{true};
-    std::atomic<bool> affectNPCs{true};
+    std::atomic<bool> affectNPCs{false};
     std::atomic<int> npcRadius{4096};
 
-    std::atomic<bool> rainSnowEnabled{true};
-    std::atomic<bool> affectInSnow{true};
-    std::atomic<bool> ignoreInterior{true};
+    std::atomic<bool> rainSnowEnabled{false};
+    std::atomic<bool> affectInSnow{false};
+    std::atomic<bool> ignoreInterior{false};
 
     std::atomic<bool> affectSkin{true};
     std::atomic<bool> affectHair{true};
@@ -27,6 +27,7 @@ namespace Settings {
     std::atomic<float> secondsToSoakWater{4.0f};
     std::atomic<float> secondsToSoakRain{18.0f};
     std::atomic<float> secondsToDry{25.0f};
+    std::atomic<float> minSubmergeToSoak{0.15f};
 
     std::atomic<float> glossinessBoost{120.0f};
     std::atomic<float> specularScaleBoost{2.0f};
@@ -70,6 +71,7 @@ namespace Settings {
             apply_if(j, "secondsToSoakWater", secondsToSoakWater);
             apply_if(j, "secondsToSoakRain", secondsToSoakRain);
             apply_if(j, "secondsToDry", secondsToDry);
+            apply_if(j, "minSubmergeToSoak", minSubmergeToSoak);
 
             apply_if(j, "glossinessBoost", glossinessBoost);
             apply_if(j, "specularScaleBoost", specularScaleBoost);
@@ -101,6 +103,7 @@ namespace Settings {
                       {"secondsToSoakWater", secondsToSoakWater.load()},
                       {"secondsToSoakRain", secondsToSoakRain.load()},
                       {"secondsToDry", secondsToDry.load()},
+                      {"minSubmergeToSoak", minSubmergeToSoak.load()},
 
                       {"glossinessBoost", glossinessBoost.load()},
                       {"specularScaleBoost", specularScaleBoost.load()},

@@ -27,6 +27,7 @@ namespace Settings {
     extern std::atomic<float> secondsToSoakWater;
     extern std::atomic<float> secondsToSoakRain;
     extern std::atomic<float> secondsToDry;
+    extern std::atomic<float> minSubmergeToSoak;
 
     extern std::atomic<float> glossinessBoost;      // added to original glossiness * wetness
     extern std::atomic<float> specularScaleBoost;   // (1 + wet * this) multiplier
