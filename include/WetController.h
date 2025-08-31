@@ -56,6 +56,8 @@ namespace SWE {
         bool IsRainingOrSnowing() const;
         bool IsSnowingCurrent() const;
 
+        bool IsNearHeatSource(const RE::Actor* a, float radius) const;
+
         struct MatSnapshot {
             float baseAlpha{1.f};
             float baseSpecularPower{20.f};

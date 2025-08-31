@@ -64,15 +64,15 @@ void __stdcall UI::WetConfig::RenderSources() {
 
         ImGui::Separator();
         float w = Settings::secondsToSoakWater.load();
-        if (ImGui::SliderFloat("Seconds to fully soak (Water)", &w, 0.5f, 120.0f, "%.1f")) {
+        if (ImGui::SliderFloat("Seconds to fully soak (Water)", &w, 0.5f, 120.0f, "%.0f")) {
             Settings::secondsToSoakWater.store(w);
         }
         float r = Settings::secondsToSoakRain.load();
-        if (ImGui::SliderFloat("Seconds to fully soak (Rain/Snow)", &r, 5.0f, 3600.0f, "%.1f")) {
+        if (ImGui::SliderFloat("Seconds to fully soak (Rain/Snow)", &r, 5.0f, 3600.0f, "%.0f")) {
             Settings::secondsToSoakRain.store(r);
         }
         float d = Settings::secondsToDry.load();
-        if (ImGui::SliderFloat("Seconds to dry", &d, 2.0f, 3600.0f, "%.1f")) {
+        if (ImGui::SliderFloat("Seconds to dry", &d, 2.0f, 3600.0f, "%.0f")) {
             Settings::secondsToDry.store(d);
         }
         ImGui::Separator();
@@ -127,6 +127,16 @@ void __stdcall UI::WetConfig::RenderMaterials() {
         float smn = Settings::minSpecularStrength.load();
         if (ImGui::SliderFloat("Min Specular Strength", &smn, 0.0f, 20.0f, "%.2f")) {
             Settings::minSpecularStrength.store(smn);
+        }
+
+        ImGui::Separator();
+        float fr = Settings::nearFireRadius.load();
+        if (ImGui::SliderFloat("Fireplace radius (units)", &fr, 100.0f, 2000.0f, "%.0f")) {
+            Settings::nearFireRadius.store(fr);
+        }
+        float fm = Settings::dryMultiplierNearFire.load();
+        if (ImGui::SliderFloat("Drying speed × near fire", &fm, 1.0f, 10.0f, "%.2f")) {
+            Settings::dryMultiplierNearFire.store(fm);
         }
 
         ImGui::Separator();

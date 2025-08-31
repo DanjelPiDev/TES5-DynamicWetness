@@ -36,6 +36,9 @@ namespace Settings {
     extern std::atomic<float> minGlossiness;        // below this is considered non-glossy
     extern std::atomic<float> minSpecularStrength;  // below this is considered non-specular
 
+    extern std::atomic<float> nearFireRadius;
+    extern std::atomic<float> dryMultiplierNearFire;
+
     extern std::atomic<int> updateIntervalMs;
 
     std::string DefaultPath();

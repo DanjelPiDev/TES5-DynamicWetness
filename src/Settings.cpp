@@ -15,9 +15,9 @@ namespace Settings {
     std::atomic<bool> affectNPCs{false};
     std::atomic<int> npcRadius{4096};
 
-    std::atomic<bool> rainSnowEnabled{false};
+    std::atomic<bool> rainSnowEnabled{true};
     std::atomic<bool> affectInSnow{false};
-    std::atomic<bool> ignoreInterior{false};
+    std::atomic<bool> ignoreInterior{true};
 
     std::atomic<bool> affectSkin{true};
     std::atomic<bool> affectHair{true};
@@ -35,6 +35,9 @@ namespace Settings {
     std::atomic<float> maxSpecularStrength{3.5f};
     std::atomic<float> minGlossiness{40.0f};
     std::atomic<float> minSpecularStrength{3.0f};
+
+    std::atomic<float> nearFireRadius{512.0f};
+    std::atomic<float> dryMultiplierNearFire{3.0f};
 
     std::atomic<int> updateIntervalMs{50};
 
@@ -82,9 +85,11 @@ namespace Settings {
             apply_if(j, "minGlossiness", minGlossiness);
             apply_if(j, "minSpecularStrength", minSpecularStrength);
 
+            apply_if(j, "nearFireRadius", nearFireRadius);
+            apply_if(j, "dryMultiplierNearFire", dryMultiplierNearFire);
+
             apply_if(j, "updateIntervalMs", updateIntervalMs);
         } catch (...) {
-            // ignore
         }
     }
 
@@ -115,6 +120,9 @@ namespace Settings {
                       {"maxSpecularStrength", maxSpecularStrength.load()},
                       {"minGlossiness", minGlossiness.load()},
                       {"minSpecularStrength", minSpecularStrength.load()},
+
+                      {"nearFireRadius", nearFireRadius.load()},
+                      {"dryMultiplierNearFire", dryMultiplierNearFire.load()},
 
                       {"updateIntervalMs", updateIntervalMs.load()}};
             std::ofstream o(path, std::ios::trunc);
