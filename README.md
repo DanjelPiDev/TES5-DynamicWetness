@@ -32,7 +32,7 @@ You can tweak:
 ## Installation
 1. Install [SKSE64](https://skse.silverlock.org/) (AE/SE supported).
 2. Drop the DLL into your `Data/SKSE/Plugins/` folder.
-3. Install [SKSEMenuFramework](https://www.nexusmods.com/skyrimspecialedition/mods/...) for in-game configuration.
+3. Install [SKSEMenuFramework](https://www.nexusmods.com/skyrimspecialedition/mods/120352) for in-game configuration.
 
 ---
 
