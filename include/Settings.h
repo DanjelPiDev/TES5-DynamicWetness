@@ -33,6 +33,8 @@ namespace Settings {
     extern std::atomic<float> specularScaleBoost;   // (1 + wet * this) multiplier
     extern std::atomic<float> maxGlossiness;        // hard clamp (e.g. 300)
     extern std::atomic<float> maxSpecularStrength;  // clamp for color channels (0...something)
+    extern std::atomic<float> minGlossiness;        // below this is considered non-glossy
+    extern std::atomic<float> minSpecularStrength;  // below this is considered non-specular
 
     extern std::atomic<int> updateIntervalMs;
 

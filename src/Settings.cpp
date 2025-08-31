@@ -33,6 +33,8 @@ namespace Settings {
     std::atomic<float> specularScaleBoost{2.0f};
     std::atomic<float> maxGlossiness{300.0f};
     std::atomic<float> maxSpecularStrength{3.5f};
+    std::atomic<float> minGlossiness{40.0f};
+    std::atomic<float> minSpecularStrength{3.0f};
 
     std::atomic<int> updateIntervalMs{50};
 
@@ -77,6 +79,8 @@ namespace Settings {
             apply_if(j, "specularScaleBoost", specularScaleBoost);
             apply_if(j, "maxGlossiness", maxGlossiness);
             apply_if(j, "maxSpecularStrength", maxSpecularStrength);
+            apply_if(j, "minGlossiness", minGlossiness);
+            apply_if(j, "minSpecularStrength", minSpecularStrength);
 
             apply_if(j, "updateIntervalMs", updateIntervalMs);
         } catch (...) {
@@ -109,6 +113,8 @@ namespace Settings {
                       {"specularScaleBoost", specularScaleBoost.load()},
                       {"maxGlossiness", maxGlossiness.load()},
                       {"maxSpecularStrength", maxSpecularStrength.load()},
+                      {"minGlossiness", minGlossiness.load()},
+                      {"minSpecularStrength", minSpecularStrength.load()},
 
                       {"updateIntervalMs", updateIntervalMs.load()}};
             std::ofstream o(path, std::ios::trunc);

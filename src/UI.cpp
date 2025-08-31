@@ -116,9 +116,17 @@ void __stdcall UI::WetConfig::RenderMaterials() {
         if (ImGui::SliderFloat("Max Glossiness", &gmx, 1.0f, 10000.0f, "%.0f")) {
             Settings::maxGlossiness.store(gmx);
         }
+        float gmn = Settings::minGlossiness.load();
+        if (ImGui::SliderFloat("Min Glossiness", &gmn, 0.0f, 300.0f, "%.1f")) {
+            Settings::minGlossiness.store(gmn);
+        }
         float smx = Settings::maxSpecularStrength.load();
         if (ImGui::SliderFloat("Max Specular Strength", &smx, 0.1f, 1000.0f, "%.2f")) {
             Settings::maxSpecularStrength.store(smx);
+        }
+        float smn = Settings::minSpecularStrength.load();
+        if (ImGui::SliderFloat("Min Specular Strength", &smn, 0.0f, 20.0f, "%.2f")) {
+            Settings::minSpecularStrength.store(smn);
         }
 
         ImGui::Separator();

@@ -330,6 +330,8 @@ namespace SWE {
 
         const float maxGloss = Settings::maxGlossiness.load();
         const float maxSpec = Settings::maxSpecularStrength.load();
+        const float minGloss = std::min(Settings::minGlossiness.load(), maxGloss);
+        const float minSpec = std::min(Settings::minSpecularStrength.load(), maxSpec);
         const float glBoost = std::min(60.0f, Settings::glossinessBoost.load());
         const float scBoost = Settings::specularScaleBoost.load();
         wet = std::clamp(wet, 0.0f, 1.0f);
@@ -374,9 +376,9 @@ namespace SWE {
             if ((newSpec.red + newSpec.green + newSpec.blue) < 0.05f) {
                 newSpec = {0.7f, 0.7f, 0.7f};
             }
-            const float newGloss = std::clamp(base.baseSpecularPower + wet * glBoost, 5.0f, maxGloss);
-            const float baseScale = std::max(0.05f, base.baseSpecularScale);
-            const float newScale = std::clamp(baseScale * (1.0f + wet * scBoost), 0.0f, maxSpec);
+            const float newGloss = std::clamp(base.baseSpecularPower + wet * glBoost, minGloss, maxGloss);
+            const float baseScale = std::max(0.0f, base.baseSpecularScale);
+            const float newScale = std::clamp(baseScale * (1.0f + wet * scBoost), minSpec, maxSpec);
 
             mat->specularPower = newGloss;
             mat->specularColor = newSpec;
