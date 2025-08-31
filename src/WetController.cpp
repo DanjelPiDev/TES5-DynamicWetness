@@ -11,6 +11,56 @@ namespace SWE {
     enum class MatCat { SkinFace, Hair, ArmorClothing, Weapon, Other };
     static inline float clampf(float v, float lo, float hi) { return (v < lo) ? lo : (v > hi) ? hi : v; }
 
+
+    static inline bool NameHas(const RE::NiAVObject* o, std::string_view s) {
+        if (!o) return false;
+        std::string n = o->name.c_str();
+        std::transform(n.begin(), n.end(), n.begin(), [](unsigned char c) { return std::tolower(c); });
+        std::string t(s);
+        std::transform(t.begin(), t.end(), t.begin(), [](unsigned char c) { return std::tolower(c); });
+        return n.find(t) != std::string::npos;
+    }
+    static bool LooksLikeHeatSource(const RE::TESObjectREFR* r) {
+        if (!r) return false;
+
+        auto lc = [](std::string s) {
+            std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return std::tolower(c); });
+            return s;
+        };
+
+        if (auto* base = r->GetBaseObject()) {
+            if (const char* nm = base->GetName()) {
+                std::string n = lc(nm);
+                if (n.find("campfire") != std::string::npos || n.find("fireplace") != std::string::npos ||
+                    n.find("brazier") != std::string::npos || n.find("hearth") != std::string::npos ||
+                    n.find("embers") != std::string::npos || n.find("forge") != std::string::npos ||
+                    n.find("smelter") != std::string::npos)
+                    return true;
+
+                if (n.find("fire") != std::string::npos && n.find("torch") == std::string::npos &&
+                    n.find("candle") == std::string::npos)
+                    return true;
+            }
+        }
+
+        if (auto* root = r->Get3D()) {
+            const RE::NiAVObject* cur = root;
+            for (int i = 0; i < 4 && cur; ++i) {
+                if (NameHas(cur, "campfire") || NameHas(cur, "fireplace") || NameHas(cur, "brazier") ||
+                    NameHas(cur, "hearth") || NameHas(cur, "embers") || NameHas(cur, "forge") ||
+                    NameHas(cur, "smelter")) {
+                    return true;
+                }
+
+                if (NameHas(cur, "fire") && !NameHas(cur, "torch") && !NameHas(cur, "candle")) {
+                    return true;
+                }
+                cur = cur->parent;
+            }
+        }
+
+        return false;
+    }
     static void ForEachGeometry(RE::NiAVObject* obj, const std::function<void(RE::BSGeometry*)>& fn) {
         if (!obj) return;
 
@@ -82,14 +132,6 @@ namespace SWE {
         }
 
         return s >= minSub;
-    }
-    static inline bool NameHas(const RE::NiAVObject* o, std::string_view s) {
-        if (!o) return false;
-        std::string n = o->name.c_str();
-        std::transform(n.begin(), n.end(), n.begin(), [](unsigned char c) { return std::tolower(c); });
-        std::string t(s);
-        std::transform(t.begin(), t.end(), t.begin(), [](unsigned char c) { return std::tolower(c); });
-        return n.find(t) != std::string::npos;
     }
     static MatCat ClassifyGeom(RE::BSGeometry* g, RE::BSLightingShaderProperty*) {
         if (g) {
@@ -279,7 +321,13 @@ namespace SWE {
         wd.lastSeen = std::chrono::steady_clock::now();
 
         const bool inWater = IsActorWetByWater(a);
-        const bool inPrecip = Settings::rainSnowEnabled.load() && IsActorInExteriorWet(a);
+
+        const bool precipNow = Settings::rainSnowEnabled.load() && IsRainingOrSnowing();
+
+        bool isInterior = false;
+        if (auto* cell = a->GetParentCell()) {
+            isInterior = cell->IsInteriorCell();
+        }
 
         const float soakWaterRate =
             (Settings::secondsToSoakWater.load() > 0.01f) ? (1.f / Settings::secondsToSoakWater.load()) : 1.0f;
@@ -287,29 +335,36 @@ namespace SWE {
             (Settings::secondsToSoakRain.load() > 0.01f) ? (1.f / Settings::secondsToSoakRain.load()) : 1.0f;
         const float dryRate = (Settings::secondsToDry.load() > 0.01f) ? (1.f / Settings::secondsToDry.load()) : 1.0f;
 
+        float dryMul = 1.0f;
+        if (!inWater) {
+            const float rad = std::max(50.0f, Settings::nearFireRadius.load());
+            const bool nearHeat = IsNearHeatSource(a, rad);
+
+            const bool allowHeatDry = nearHeat && (!precipNow || isInterior);
+            if (allowHeatDry) {
+                dryMul = std::max(1.0f, Settings::dryMultiplierNearFire.load());
+            }
+        }
+
         float w = wd.wetness;
+
         if (inWater) {
             w += soakWaterRate * dt;
-        } else if (inPrecip) {
-            const float snowFactor = (IsSnowingCurrent() ? 0.8f : 1.0f);
-            w += soakRainRate * snowFactor * dt;
         } else {
-            w -= dryRate * dt;
+            if (precipNow && !isInterior) {
+                const float snowFactor = (IsSnowingCurrent() ? 0.8f : 1.0f);
+                w += soakRainRate * snowFactor * dt;
+            } else {
+                w -= dryRate * dryMul * dt;
+            }
         }
+
         w = clampf(w, 0.f, 1.f);
         wd.wetness = w;
 
         if (std::abs(wd.lastAppliedWet - w) > 0.0025f) {
             ApplyWetnessMaterials(a, w);
             wd.lastAppliedWet = w;
-        }
-
-        if (a->IsPlayerRef()) {
-            static auto lastToast = std::chrono::steady_clock::now();
-            if (std::chrono::steady_clock::now() - lastToast > 1s && std::abs(wd.lastAppliedWet - w) > 0.05f) {
-                RE::DebugNotification((std::string("SWE: wetness=") + std::to_string(w)).c_str());
-                lastToast = std::chrono::steady_clock::now();
-            }
         }
     }
 
@@ -404,5 +459,31 @@ namespace SWE {
         if (a->IsPlayerRef() && std::chrono::steady_clock::now() - lastToast > 1s) {
             lastToast = std::chrono::steady_clock::now();
         }
+    }
+
+    bool WetController::IsNearHeatSource(const RE::Actor* a, float radius) const {
+        if (!a || radius <= 0.f) return false;
+        auto* cell = a->GetParentCell();
+        if (!cell) return false;
+
+        const RE::NiPoint3 center = a->GetPosition();
+        const float r2 = radius * radius;
+
+        bool found = false;
+        cell->ForEachReference([&](RE::TESObjectREFR& ref) {
+            if (found) return RE::BSContainer::ForEachResult::kStop;
+
+            if (&ref == a || !ref.Is3DLoaded()) return RE::BSContainer::ForEachResult::kContinue;
+
+            if (ref.GetPosition().GetSquaredDistance(center) > r2) return RE::BSContainer::ForEachResult::kContinue;
+
+            if (LooksLikeHeatSource(&ref)) {
+                found = true;
+                return RE::BSContainer::ForEachResult::kStop;
+            }
+            return RE::BSContainer::ForEachResult::kContinue;
+        });
+
+        return found;
     }
 }
