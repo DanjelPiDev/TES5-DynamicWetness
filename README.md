@@ -16,7 +16,7 @@ Unlike script-based approaches, this is a pure DLL implementation with smooth tr
 - Applies to **Player** and optionally **NPCs** (with adjustable radius).
 - Supports **skin, hair, armor, and weapons** independently.
 - Works alongside **ENB wet surfaces** and mods using shader-based drip effects.
-- Highly configurable via JSON and optional in-game SKSEMenuFramework UI.
+- Highly configurable via JSON and in-game SKSEMenuFramework UI.
 
 ---
 
