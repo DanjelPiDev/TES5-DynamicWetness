@@ -30,14 +30,16 @@ namespace Settings {
     std::atomic<float> minSubmergeToSoak{0.15f};
 
     std::atomic<float> glossinessBoost{120.0f};
-    std::atomic<float> specularScaleBoost{2.0f};
-    std::atomic<float> maxGlossiness{300.0f};
-    std::atomic<float> maxSpecularStrength{3.5f};
+    std::atomic<float> specularScaleBoost{8.0f};
+    std::atomic<float> maxGlossiness{800.0f};
+    std::atomic<float> maxSpecularStrength{10.0f};
     std::atomic<float> minGlossiness{40.0f};
     std::atomic<float> minSpecularStrength{3.0f};
 
     std::atomic<float> nearFireRadius{512.0f};
     std::atomic<float> dryMultiplierNearFire{3.0f};
+
+    std::atomic<float> skinHairResponseMul{5.0f};
 
     std::atomic<int> updateIntervalMs{50};
 
@@ -88,6 +90,8 @@ namespace Settings {
             apply_if(j, "nearFireRadius", nearFireRadius);
             apply_if(j, "dryMultiplierNearFire", dryMultiplierNearFire);
 
+            apply_if(j, "skinHairResponseMul", skinHairResponseMul);
+
             apply_if(j, "updateIntervalMs", updateIntervalMs);
         } catch (...) {
         }
@@ -124,10 +128,46 @@ namespace Settings {
                       {"nearFireRadius", nearFireRadius.load()},
                       {"dryMultiplierNearFire", dryMultiplierNearFire.load()},
 
+                      {"skinHairResponseMul", skinHairResponseMul.load()},
+
                       {"updateIntervalMs", updateIntervalMs.load()}};
             std::ofstream o(path, std::ios::trunc);
             o << j.dump(2);
         } catch (...) {
         }
+    }
+
+    void ResetToDefaults() {
+        modEnabled.store(true);
+        affectNPCs.store(false);
+        npcRadius.store(4096);
+
+        rainSnowEnabled.store(false);
+        affectInSnow.store(false);
+        ignoreInterior.store(true);
+
+        affectSkin.store(true);
+        affectHair.store(true);
+        affectArmor.store(true);
+        affectWeapons.store(true);
+
+        secondsToSoakWater.store(2.0f);
+        secondsToSoakRain.store(36.0f);
+        secondsToDry.store(40.0f);
+        minSubmergeToSoak.store(0.15f);
+
+        glossinessBoost.store(120.0f);
+        specularScaleBoost.store(2.0f);
+        maxGlossiness.store(300.0f);
+        maxSpecularStrength.store(3.5f);
+        minGlossiness.store(40.0f);
+        minSpecularStrength.store(3.0f);
+
+        nearFireRadius.store(512.0f);
+        dryMultiplierNearFire.store(3.0f);
+
+        skinHairResponseMul.store(2.0f);
+
+        updateIntervalMs.store(50);
     }
 }

@@ -14,6 +14,7 @@ namespace UI {
         void __stdcall RenderNPCs();
 
         inline std::string saveIcon = FontAwesome::UnicodeToUtf8(0xf0c7) + " Save Settings";
+        inline std::string resetIcon = FontAwesome::UnicodeToUtf8(0xf0e2) + " Reset to Defaults";
 
         inline std::string generalHeader = FontAwesome::UnicodeToUtf8(0xf013) + " General";
         inline std::string sourcesHeader = FontAwesome::UnicodeToUtf8(0xf743) + " Sources & Timings";

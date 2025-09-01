@@ -39,9 +39,14 @@ namespace Settings {
     extern std::atomic<float> nearFireRadius;
     extern std::atomic<float> dryMultiplierNearFire;
 
+    extern std::atomic<float> skinHairResponseMul;
+
     extern std::atomic<int> updateIntervalMs;
 
     std::string DefaultPath();
+
     void LoadFromJson(const std::string& path);
     void SaveToJson(const std::string& path);
+
+    void ResetToDefaults();
 }

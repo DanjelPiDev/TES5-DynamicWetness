@@ -407,6 +407,7 @@ namespace SWE {
         const float minSpec = std::min(Settings::minSpecularStrength.load(), maxSpec);
         const float glBoost = std::min(60.0f, Settings::glossinessBoost.load());
         const float scBoost = Settings::specularScaleBoost.load();
+
         wet = std::clamp(wet, 0.0f, 1.0f);
 
         int geomsTouched = 0, propsTouched = 0;
@@ -422,6 +423,10 @@ namespace SWE {
                 (cat == MatCat::Weapon && !Settings::affectWeapons.load())) {
                 return;
             }
+
+            const float catMul = (cat == MatCat::SkinFace || cat == MatCat::Hair)
+                                     ? std::max(0.1f, Settings::skinHairResponseMul.load())
+                                     : 1.0f;
 
             auto* mat = static_cast<RE::BSLightingShaderMaterialBase*>(lsp->material);
             if (!mat) return;
@@ -468,10 +473,10 @@ namespace SWE {
             if ((newSpec.red + newSpec.green + newSpec.blue) < 0.05f) {
                 newSpec = {0.7f, 0.7f, 0.7f};
             }
-            float newGloss = base.baseSpecularPower + wet * glBoost;
+            float newGloss = base.baseSpecularPower + wet * glBoost * catMul;
             newGloss = std::clamp(newGloss, minGloss, maxGloss);
 
-            float newScale = base.baseSpecularScale + wet * scBoost;
+            float newScale = base.baseSpecularScale + wet * scBoost * catMul;
             newScale = std::clamp(newScale, minSpec, maxSpec);
 
             mat->specularPower = newGloss;
