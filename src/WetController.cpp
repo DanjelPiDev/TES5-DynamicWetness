@@ -6,6 +6,9 @@
 #include "Settings.h"
 #include "REL/Relocation.h"
 
+#include "RE/B/BSLightingShaderMaterialBase.h"
+#include "RE/B/BSTextureSet.h"
+
 using namespace std::chrono_literals;
 
 namespace SWE {
@@ -87,7 +90,6 @@ namespace SWE {
         static REL::Relocation<func_t> func{REL::RelocationID(36452, 37448)};
         return func(a, z, cell);
     }
-
     static inline float ComputeSubmergeLevel(RE::Actor* a) {
         if (!a) return 0.0f;
 
@@ -142,7 +144,60 @@ namespace SWE {
 
         return s >= minSub;
     }
-    static MatCat ClassifyGeom(RE::BSGeometry* g, RE::BSLightingShaderProperty*) {
+    static bool TexLooksLikeBodySkin(RE::BSLightingShaderMaterialBase* mb) {
+        RE::BSTextureSet* ts = mb->textureSet.get();
+        if (!ts) return false;
+
+        using Tex = RE::BSTextureSet::Texture;
+        auto texPathDN = [&](int dn) -> const char* {
+            Tex slot = (dn == 0) ? Tex::kDiffuse : Tex::kNormal;
+            return ts->GetTexturePath(slot);
+        };
+
+        auto has = [&](int idx, std::string_view needle) {
+            const char* p = texPathDN(idx);
+            if (!p || !p[0]) return false;
+            std::string s(p);
+            std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return std::tolower(c); });
+            return s.find(needle) != std::string::npos;
+        };
+
+        const bool inActors = has(0, "actors/character") || has(1, "actors/character");
+        const bool skinish = has(0, "body") || has(1, "body") || has(0, "hand") || has(1, "hand") || has(0, "feet") ||
+                             has(1, "feet") || has(0, "skin") || has(1, "skin");
+        const bool armorish = has(0, "armor/") || has(1, "armor/") || has(0, "clothes/") || has(1, "clothes/");
+        return inActors && skinish && !armorish;
+    }
+    static bool LooksLikeBodySkin(const RE::NiAVObject* o) {
+        const RE::NiAVObject* cur = o;
+        for (int i = 0; i < 4 && cur; ++i) {
+            const bool isSkiny = NameHas(cur, "body") || NameHas(cur, "hands") || NameHas(cur, "hand") ||
+                                 NameHas(cur, "feet") || NameHas(cur, "foot") || NameHas(cur, "skin") ||
+                                 NameHas(cur, "femalebody") || NameHas(cur, "malebody");
+            const bool looksArmor = NameHas(cur, "armor") || NameHas(cur, "cuirass") || NameHas(cur, "gauntlet") ||
+                                    NameHas(cur, "glove") || NameHas(cur, "boot") || NameHas(cur, "shoe") ||
+                                    NameHas(cur, "robe");
+            if (isSkiny && !looksArmor) return true;
+            cur = cur->parent;
+        }
+        return false;
+    }
+    static MatCat ClassifyGeom(RE::BSGeometry* g, RE::BSLightingShaderProperty* lsp) {
+        if (lsp && lsp->material) {
+            if (auto* mb = static_cast<RE::BSLightingShaderMaterialBase*>(lsp->material)) {
+                using F = RE::BSLightingShaderMaterialBase::Feature;
+                switch (mb->GetFeature()) {
+                    case F::kFaceGen:
+                    case F::kFaceGenRGBTint:
+                        return MatCat::SkinFace;
+                    case F::kHairTint:
+                        return MatCat::Hair;
+                    default:
+                        break;
+                }
+            }
+        }
+
         if (g) {
             auto& grt = g->GetGeometryRuntimeData();
             if (auto* si = grt.skinInstance.get()) {
@@ -159,10 +214,15 @@ namespace SWE {
                                 return MatCat::Weapon;
                             case 32:
                             case 33:
+                            case 37: {
+                                auto* mb =
+                                    lsp ? static_cast<RE::BSLightingShaderMaterialBase*>(lsp->material) : nullptr;
+                                if ((mb && TexLooksLikeBodySkin(mb)) || LooksLikeBodySkin(g)) return MatCat::SkinFace;
+                                return MatCat::ArmorClothing;
+                            }
                             case 34:
                             case 35:
                             case 36:
-                            case 37:
                             case 38:
                             case 39:
                             case 40:
@@ -179,6 +239,7 @@ namespace SWE {
         for (int i = 0; i < 4 && cur; ++i) {
             if (NameHas(cur, "hair")) return MatCat::Hair;
             if (NameHas(cur, "head") || NameHas(cur, "face")) return MatCat::SkinFace;
+            if (LooksLikeBodySkin(cur)) return MatCat::SkinFace;
             if (NameHas(cur, "weapon") || NameHas(cur, "sword") || NameHas(cur, "bow") || NameHas(cur, "dagger"))
                 return MatCat::Weapon;
             cur = cur->parent;
