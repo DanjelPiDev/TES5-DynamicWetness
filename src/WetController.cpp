@@ -9,7 +9,22 @@
 #include "RE/B/BSLightingShaderMaterialBase.h"
 #include "RE/B/BSTextureSet.h"
 
+#include "RE/B/bhkCollisionObject.h"
+#include "RE/B/bhkPickData.h"
+#include "RE/B/bhkWorld.h"
+#include "RE/T/TESObjectCELL.h"
+#include "RE/H/hkpWorldRayCastInput.h"
+#include "RE/H/hkpWorldRayCastOutput.h"
+
 using namespace std::chrono_literals;
+
+#ifndef SWE_RAY_DEBUG
+    #define SWE_RAY_DEBUG 0
+#endif
+
+#ifndef SWE_ROOF_SAMPLES
+    #define SWE_ROOF_SAMPLES 5
+#endif
 
 namespace SWE {
     enum class MatCat { SkinFace, Hair, ArmorClothing, Weapon, Other };
@@ -256,7 +271,116 @@ namespace SWE {
         }
         return nullptr;
     }
+    static inline std::uint32_t MakeFilterInfo(RE::COL_LAYER layer, std::uint16_t systemGroup = 0xFFFF,
+                                               std::uint8_t subSystemId = 0, std::uint8_t subSystemNoCollide = 0) {
+        return (static_cast<std::uint32_t>(layer) & 0x3F) | ((static_cast<std::uint32_t>(subSystemId) & 0x1F) << 6) |
+               ((static_cast<std::uint32_t>(subSystemNoCollide) & 0x1F) << 11) |
+               ((static_cast<std::uint32_t>(systemGroup) & 0xFFFF) << 16);
+    }
+    static constexpr RE::COL_LAYER kRoofLayersPrimary[] = {
+        RE::COL_LAYER::kStatic,        RE::COL_LAYER::kAnimStatic,  RE::COL_LAYER::kTransparentWall,
+        RE::COL_LAYER::kInvisibleWall, RE::COL_LAYER::kTransparent,
+        RE::COL_LAYER::kLOS,
+    };
 
+    static constexpr RE::COL_LAYER kRoofLayersFallback[] = {
+        RE::COL_LAYER::kProps,         RE::COL_LAYER::kTrees,       RE::COL_LAYER::kClutterLarge,
+        RE::COL_LAYER::kDoorDetection, RE::COL_LAYER::kPathingPick,
+    };
+
+    static inline std::uint32_t RayFilter(RE::COL_LAYER lyr) { return MakeFilterInfo(lyr, 0xFFFF, 0, 0); }
+    static inline RE::bhkWorld* GetBhkWorldFromActorCell(const RE::Actor* a) {
+        if (!a) return nullptr;
+        if (auto* cell = a->GetParentCell()) {
+            return cell->GetbhkWorld();
+        }
+        return nullptr;
+    }
+    static inline float ActorHeadZ(const RE::Actor* a) {
+        if (!a) return 0.f;
+        float z = a->GetPosition().z + 120.0f;
+        if (auto* root = a->Get3D()) {
+            const auto& wb = root->worldBound;
+            z = std::max(z, wb.center.z + wb.radius * 0.6f);
+        }
+        return z;
+    }
+    static const char* LayerName(std::uint32_t lyr) {
+        using L = RE::COL_LAYER;
+        switch (static_cast<L>(lyr & 0x7F)) {
+            case L::kStatic:
+                return "Static";
+            case L::kAnimStatic:
+                return "AnimStatic";
+            case L::kTransparent:
+                return "Transparent";
+            case L::kTransparentWall:
+                return "TransparentWall";
+            case L::kInvisibleWall:
+                return "InvisibleWall";
+            case L::kLOS:
+                return "LOS";
+            case L::kProps:
+                return "Props";
+            case L::kTrees:
+                return "Trees";
+            case L::kClutterLarge:
+                return "ClutterLarge";
+            case L::kDoorDetection:
+                return "DoorDetection";
+            case L::kPathingPick:
+                return "PathingPick";
+            case L::kDroppingPick:
+                return "DroppingPick";
+            case L::kGround:
+                return "Ground";
+            case L::kWater:
+                return "Water";
+            default:
+                return "Other";
+        }
+    }
+    
+    static inline RE::hkVector4 ToHK(const RE::NiPoint3& p) {
+        const float s = RE::bhkWorld::GetWorldScale();  // ~0.0142857
+        return RE::hkVector4{p.x * s, p.y * s, p.z * s, 0.0f};
+    }
+
+    static void LogOneHit(const char* tag, const RE::NiPoint3& from, const RE::NiPoint3& to,
+                          const RE::bhkPickData& pd) {
+        const float t = pd.rayOutput.hitFraction;
+        const RE::NiPoint3 hit{from.x + (to.x - from.x) * t, from.y + (to.y - from.y) * t,
+                               from.z + (to.z - from.z) * t};
+
+        const RE::hkpCollidable* col = pd.rayOutput.rootCollidable;
+        std::uint32_t layer = 0xFFFFFFFF, cfi = 0;
+        if (col) {
+            layer = static_cast<std::uint32_t>(col->GetCollisionLayer());
+            cfi = col->broadPhaseHandle.collisionFilterInfo;
+        }
+
+        spdlog::info("[SWE] HIT {}  t={:.3f}  at=({:.1f},{:.1f},{:.1f})  layer={} ({})  cfi=0x{:08X}", tag, t, hit.x,
+                     hit.y, hit.z, layer, LayerName(layer), cfi);
+    }
+    static inline bool CastOnce(RE::bhkWorld* bw, const RE::NiPoint3& fromW, const RE::NiPoint3& toW,
+                                std::uint32_t filterInfo, bool enableCollectionFilter) {
+        if (!bw) return false;
+
+        RE::bhkPickData pd{};
+        pd.rayInput.from = ToHK(fromW);
+        pd.rayInput.to = ToHK(toW);
+
+        const float s = RE::bhkWorld::GetWorldScale();
+        const RE::NiPoint3 dW{toW.x - fromW.x, toW.y - fromW.y, toW.z - fromW.z};
+        pd.ray = RE::hkVector4{dW.x * s, dW.y * s, dW.z * s, 0.0f};
+
+        pd.rayInput.filterInfo = filterInfo;
+        pd.rayInput.enableShapeCollectionFilter = enableCollectionFilter;
+        pd.rayOutput.Reset();
+
+        return bw->PickObject(pd) && pd.rayOutput.HasHit();
+    }
+    
     void WetController::Install() {
         _lastTick = std::chrono::steady_clock::now();
     }
@@ -401,12 +525,21 @@ namespace SWE {
         wd.lastSeen = std::chrono::steady_clock::now();
 
         const bool inWater = IsActorWetByWater(a);
-
         const bool precipNow = Settings::rainSnowEnabled.load() && IsRainingOrSnowing();
 
         bool isInterior = false;
         if (auto* cell = a->GetParentCell()) {
             isInterior = cell->IsInteriorCell();
+        }
+        // If it is precipitating outside and we are in an exterior, probe roof cover
+        bool inPrecipOnActor = false;
+        if (precipNow && !isInterior) {
+            const auto tnow = std::chrono::steady_clock::now();
+            if (wd.lastRoofProbe.time_since_epoch().count() == 0 || (tnow - wd.lastRoofProbe) > 800ms) {
+                wd.lastRoofCovered = IsUnderRoof(a);
+                wd.lastRoofProbe = tnow;
+            }
+            inPrecipOnActor = !wd.lastRoofCovered;
         }
 
         const float soakWaterRate =
@@ -417,11 +550,12 @@ namespace SWE {
 
         float dryMul = 1.0f;
         if (!inWater) {
-            const float rad = std::max(50.0f, Settings::nearFireRadius.load());
-            const bool nearHeat = IsNearHeatSource(a, rad);
-
-            const bool allowHeatDry = nearHeat && (!precipNow || isInterior);
-            if (allowHeatDry) {
+            const auto now = std::chrono::steady_clock::now();
+            if (wd.lastHeatProbe.time_since_epoch().count() == 0 || (now - wd.lastHeatProbe) > 1s) {
+                wd.cachedNearHeat = IsNearHeatSource(a, std::max(50.0f, Settings::nearFireRadius.load()));
+                wd.lastHeatProbe = now;
+            }
+            if (wd.cachedNearHeat && !inPrecipOnActor) {
                 dryMul = std::max(1.0f, Settings::dryMultiplierNearFire.load());
             }
         }
@@ -430,13 +564,11 @@ namespace SWE {
 
         if (inWater) {
             w += soakWaterRate * dt;
+        } else if (inPrecipOnActor) {
+            const float snowFactor = (IsSnowingCurrent() ? 0.8f : 1.0f);
+            w += soakRainRate * snowFactor * dt;
         } else {
-            if (precipNow && !isInterior) {
-                const float snowFactor = (IsSnowingCurrent() ? 0.8f : 1.0f);
-                w += soakRainRate * snowFactor * dt;
-            } else {
-                w -= dryRate * dryMul * dt;
-            }
+            w -= dryRate * dryMul * dt;
         }
 
         w = clampf(w, 0.f, 1.f);
@@ -600,5 +732,69 @@ namespace SWE {
         });
 
         return found;
+    }
+
+    bool WetController::RayHitsCover(const RE::NiPoint3& from, const RE::NiPoint3& to,
+                                     const RE::TESObjectREFR* ignoreRef) const {
+        const RE::Actor* a = ignoreRef ? ignoreRef->As<RE::Actor>() : nullptr;
+        auto* bw = GetBhkWorldFromActorCell(a);
+        if (!bw) {
+            return false;
+        }
+
+#if SWE_RAY_DEBUG
+        // DebugRayScan(bw, from, to);
+#endif
+
+        static constexpr RE::COL_LAYER kPrim[] = {RE::COL_LAYER::kLOS, RE::COL_LAYER::kStatic,
+                                                  RE::COL_LAYER::kTransparentWall, RE::COL_LAYER::kInvisibleWall};
+
+        for (auto lyr : kPrim) {
+            const auto fi = MakeFilterInfo(lyr, 0xFFFF, 0, 0);
+            if (CastOnce(bw, from, to, fi, true)) return true;
+
+        }
+        return false;
+    }
+
+    bool WetController::IsUnderRoof(RE::Actor* a) const {
+        if (!a || !IsRainingOrSnowing()) return false;
+
+        const RE::NiPoint3 base = a->GetPosition();
+        const float headZ = ActorHeadZ(a) + 5.0f;
+        constexpr float toAbove = 4000.0f;
+        constexpr float off = 60.0f;
+
+#if SWE_ROOF_SAMPLES == 9
+        const RE::NiPoint3 starts[] = {
+            {base.x, base.y, headZ},
+            {base.x + off, base.y, headZ},
+            {base.x - off, base.y, headZ},
+            {base.x, base.y + off, headZ},
+            {base.x, base.y - off, headZ},
+            {base.x + off, base.y + off, headZ},
+            {base.x - off, base.y + off, headZ},
+            {base.x + off, base.y - off, headZ},
+            {base.x - off, base.y - off, headZ},
+        };
+#elif SWE_ROOF_SAMPLES == 5
+        const RE::NiPoint3 starts[] = {
+            {base.x, base.y, headZ},       {base.x + off, base.y, headZ}, {base.x - off, base.y, headZ},
+            {base.x, base.y + off, headZ}, {base.x, base.y - off, headZ},
+        };
+#else
+        const RE::NiPoint3 starts[] = {
+            {base.x, base.y, headZ},
+            {base.x + off, base.y, headZ},
+            {base.x, base.y + off, headZ},
+        };
+#endif
+
+        for (const auto& s : starts) {
+            const RE::NiPoint3 from{s.x, s.y, headZ + 2.0f};
+            const RE::NiPoint3 to{s.x, s.y, headZ + toAbove};
+            if (RayHitsCover(from, to, a)) return true;
+        }
+        return false;
     }
 }

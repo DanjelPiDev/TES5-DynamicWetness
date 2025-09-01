@@ -42,6 +42,10 @@ namespace SWE {
             float wetness{0.f};  // 0...1
             float lastAppliedWet{-1.f};
             std::chrono::steady_clock::time_point lastSeen;
+            std::chrono::steady_clock::time_point lastRoofProbe{};
+            bool lastRoofCovered{false};
+            std::chrono::steady_clock::time_point lastHeatProbe{};
+            bool cachedNearHeat{false};
         };
 
         // Keyed by FormID to keep it simple and robust across handles
@@ -57,6 +61,9 @@ namespace SWE {
         bool IsSnowingCurrent() const;
 
         bool IsNearHeatSource(const RE::Actor* a, float radius) const;
+        bool RayHitsCover(const RE::NiPoint3& from, const RE::NiPoint3& to,
+                          const RE::TESObjectREFR* ignoreRef = nullptr) const;
+        bool IsUnderRoof(RE::Actor* a) const;
 
         struct MatSnapshot {
             float baseAlpha{1.f};
