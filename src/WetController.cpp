@@ -28,8 +28,9 @@ using namespace std::chrono_literals;
 
 namespace SWE {
     enum class MatCat { SkinFace, Hair, ArmorClothing, Weapon, Other };
-    static inline float clampf(float v, float lo, float hi) { return (v < lo) ? lo : (v > hi) ? hi : v; }
 
+    static inline float clampf(float v, float lo, float hi) { return (v < lo) ? lo : (v > hi) ? hi : v; }
+    
     static inline void SetSpecularEnabled(RE::BSShaderProperty* sp, bool on) {
         if (!sp) return;
         if (on)
@@ -100,6 +101,110 @@ namespace SWE {
             }
         }
     }
+    static bool LooksLikeWaterfall(RE::TESObjectREFR* r) {
+        if (!r) return false;
+
+        auto lc = [](std::string s) {
+            std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return std::tolower(c); });
+            return s;
+        };
+
+        if (auto* base = r->GetBaseObject()) {
+
+#if defined(CLASSIC_CLIB_HAS_EDITORID) || defined(SKYRIM_AE) || defined(SKYRIM_SE)
+            if (const char* ed = base->GetFormEditorID(); ed && *ed) {
+                std::string e = lc(ed);
+                if (e.find("waterfall") != std::string::npos && e.find("splash") == std::string::npos &&
+                    e.find("foam") == std::string::npos)
+                    return true;
+            }
+#endif
+
+            if (auto* tm = skyrim_cast<RE::TESModel*>(base)) {
+                if (const char* model = tm->GetModel(); model && model[0]) {
+                    std::string m = lc(model);
+                    const bool hasWF = (m.find("waterfall") != std::string::npos) ||
+                                       (m.find("fx\\waterfall") != std::string::npos) ||
+                                       (m.find("fx/waterfall") != std::string::npos);
+                    const bool isAux = (m.find("splash") != std::string::npos) ||
+                                       (m.find("ripple") != std::string::npos) ||
+                                       (m.find("foam") != std::string::npos);
+                    if (!hasWF && isAux) return false;
+                    if (hasWF) return true;
+                }
+            }
+        }
+
+        if (auto* root = r->Get3D()) {
+            const RE::NiAVObject* cur = root;
+            for (int i = 0; i < 4 && cur; ++i) {
+                if (NameHas(cur, "waterfall") || NameHas(cur, "falls")) return true;
+                cur = cur->parent;
+            }
+            bool hit = false;
+            ForEachGeometry(root, [&](RE::BSGeometry* g) {
+                if (hit) return;
+                if (NameHas(g, "waterfall") || NameHas(g, "falls")) hit = true;
+            });
+            if (hit) return true;
+        }
+
+        return false;
+    }
+    static bool HasAuxKeywords(const RE::NiAVObject* root) {
+        if (!root) return false;
+        auto hasAny = [](const RE::NiAVObject* o) {
+            return NameHas(o, "splash") || NameHas(o, "foam") || NameHas(o, "mist") || NameHas(o, "spray") ||
+                   NameHas(o, "ripple") || NameHas(o, "droplet");
+        };
+        const RE::NiAVObject* cur = root;
+        for (int i = 0; i < 4 && cur; ++i) {
+            if (hasAny(cur)) return true;
+            cur = cur->parent;
+        }
+        bool hit = false;
+        ForEachGeometry(const_cast<RE::NiAVObject*>(root), [&](RE::BSGeometry* g) {
+            if (hit) return;
+            if (hasAny(g)) hit = true;
+        });
+        return hit;
+    }
+    static bool MostlyParticleOrEffect(const RE::NiAVObject* root) {
+        if (!root) return false;
+        int particles = 0, lighting = 0;
+        ForEachGeometry(const_cast<RE::NiAVObject*>(root), [&](RE::BSGeometry* g) {
+            auto& rdata = g->GetGeometryRuntimeData();
+            for (auto& p : rdata.properties) {
+                if (!p) continue;
+                if (skyrim_cast<RE::BSLightingShaderProperty*>(p.get())) {
+                    ++lighting;
+                } else if (skyrim_cast<RE::BSParticleShaderProperty*>(p.get()) ||
+                           skyrim_cast<RE::BSEffectShaderProperty*>(p.get())) {
+                    ++particles;
+                }
+            }
+        });
+        return particles > 0 && lighting == 0;
+    }
+    static inline bool LooksLikeTallWaterSheet(const RE::NiPoint3& bmin, const RE::NiPoint3& bmax) {
+        const float H = bmax.z - bmin.z;
+        const float W = bmax.x - bmin.x;
+        const float D = bmax.y - bmin.y;
+        return (H > 200.f) && (H > std::max(W, D) * 1.15f);
+    }
+    static inline bool LooksLikeWideTallWaterSheet(const RE::NiPoint3& bmin, const RE::NiPoint3& bmax) {
+        const float H = bmax.z - bmin.z;
+        const float W = bmax.x - bmin.x;
+        const float D = bmax.y - bmin.y;
+        const float horiz = std::max(W, D);
+        return (H >= 220.f) && (horiz >= 96.f) && (H >= horiz * 1.1f);
+    }
+    static inline float Dist2XY(const RE::NiPoint3& a, const RE::NiPoint3& b) {
+        const float dx = a.x - b.x;
+        const float dy = a.y - b.y;
+        return dx * dx + dy * dy;
+    }
+
     static inline float GetSubmergedLevel(RE::Actor* a, float z, RE::TESObjectCELL* cell) {
         using func_t = float (*)(RE::Actor*, float, RE::TESObjectCELL*);
         static REL::Relocation<func_t> func{REL::RelocationID(36452, 37448)};
@@ -371,6 +476,35 @@ namespace SWE {
         std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c) { return std::tolower(c); });
         return key;
     }
+    static bool BuildWorldAABB(RE::NiAVObject* root, RE::NiPoint3& outMin, RE::NiPoint3& outMax) {
+        if (!root) return false;
+        bool any = false;
+        RE::NiPoint3 mn{+FLT_MAX, +FLT_MAX, +FLT_MAX};
+        RE::NiPoint3 mx{-FLT_MAX, -FLT_MAX, -FLT_MAX};
+        ForEachGeometry(root, [&](RE::BSGeometry* g) {
+            const auto& wb = g->worldBound;
+            const RE::NiPoint3 c = wb.center;
+            const float r = wb.radius;
+            mn.x = std::min(mn.x, c.x - r);
+            mx.x = std::max(mx.x, c.x + r);
+            mn.y = std::min(mn.y, c.y - r);
+            mx.y = std::max(mx.y, c.y + r);
+            mn.z = std::min(mn.z, c.z - r);
+            mx.z = std::max(mx.z, c.z + r);
+            any = true;
+        });
+        if (!any) {
+            const auto& wb = root->worldBound;
+            const RE::NiPoint3 c = wb.center;
+            const float r = wb.radius;
+            mn = {c.x - r, c.y - r, c.z - r};
+            mx = {c.x + r, c.y + r, c.z + r};
+        }
+        outMin = mn;
+        outMax = mx;
+        return true;
+    }
+
     
     void WetController::Install() {
         _lastTick = std::chrono::steady_clock::now();
@@ -537,6 +671,8 @@ namespace SWE {
             (Settings::secondsToSoakWater.load() > 0.01f) ? (1.f / Settings::secondsToSoakWater.load()) : 1.0f;
         const float soakRainRate =
             (Settings::secondsToSoakRain.load() > 0.01f) ? (1.f / Settings::secondsToSoakRain.load()) : 1.0f;
+        const float soakWaterfallRate =
+            (Settings::secondsToSoakWaterfall.load() > 0.01f) ? (1.f / Settings::secondsToSoakWaterfall.load()) : 1.0f;
         const float dryRate = (Settings::secondsToDry.load() > 0.01f) ? (1.f / Settings::secondsToDry.load()) : 1.0f;
 
         float dryMul = 1.0f;
@@ -551,10 +687,71 @@ namespace SWE {
             }
         }
 
+        bool nearWaterfall = false;
+        if (!inWater && Settings::waterfallEnabled.load()) {
+            const auto now = std::chrono::steady_clock::now();
+            if (wd.lastWaterfallProbe.time_since_epoch().count() == 0 || (now - wd.lastWaterfallProbe) > 800ms) {
+                const float r2 = Settings::nearWaterfallRadius.load() * Settings::nearWaterfallRadius.load();
+                bool found = false;
+                if (auto* cell = a->GetParentCell()) {
+                    const RE::NiPoint3 center = a->GetPosition();
+                    cell->ForEachReference([&](RE::TESObjectREFR& ref) {
+                        if (found) return RE::BSContainer::ForEachResult::kStop;
+                        if (&ref == a) return RE::BSContainer::ForEachResult::kContinue;
+
+                        bool plausible = LooksLikeWaterfall(&ref);
+                        RE::NiPoint3 bmin{}, bmax{};
+                        RE::NiAVObject* root = ref.Get3D();
+
+                        RE::NiPoint3 testPos = ref.GetPosition();
+                        if (root && BuildWorldAABB(root, bmin, bmax)) {
+                            testPos.x = 0.5f * (bmin.x + bmax.x);
+                            testPos.y = 0.5f * (bmin.y + bmax.y);
+                            if (LooksLikeTallWaterSheet(bmin, bmax)) plausible = true;
+                        }
+
+                        const float r2xy = Settings::nearWaterfallRadius.load() * Settings::nearWaterfallRadius.load();
+                        if (Dist2XY(testPos, center) > r2xy) return RE::BSContainer::ForEachResult::kContinue;
+
+                        if (!plausible) {
+                            return RE::BSContainer::ForEachResult::kContinue;
+                        }
+
+                        if (!ref.Is3DLoaded() || !root) {
+                            return RE::BSContainer::ForEachResult::kContinue;
+                        }
+                        bool requireBelowTop = true;
+                        if (BuildWorldAABB(root, bmin, bmax)) {
+                            if (ActorHeadZ(a) - bmax.z > 256.0f) {
+                                requireBelowTop = false;
+                            }
+                        }
+
+                        const bool inside = IsInsideWaterfallFX(
+                            a, &ref, std::max(0.f, Settings::waterfallWidthPad.load()),
+                            std::max(0.f, Settings::waterfallDepthPad.load()),
+                            std::max(0.f, Settings::waterfallZPad.load()), requireBelowTop /* vorher true */);
+
+                        if (inside) {
+                            found = true;
+                            return RE::BSContainer::ForEachResult::kStop;
+                        }
+                        return RE::BSContainer::ForEachResult::kContinue;
+                    });
+
+                }
+                wd.cachedInsideWaterfall = found;
+                wd.lastWaterfallProbe = now;
+            }
+            nearWaterfall = wd.cachedInsideWaterfall;
+        }
+
         float w = wd.wetness;
 
         if (inWater) {
             w += soakWaterRate * dt;
+        } else if (nearWaterfall) {
+            w += soakWaterfallRate * dt;
         } else if (inPrecipOnActor) {
             const float snowFactor = (IsSnowingCurrent() ? 0.8f : 1.0f);
             w += soakRainRate * snowFactor * dt;
@@ -727,6 +924,39 @@ namespace SWE {
         return found;
     }
 
+    bool WetController::IsInsideWaterfallFX(const RE::Actor* a, const RE::TESObjectREFR* wfRef, float padX, float padY,
+                                            float padZ, bool requireBelowTop) const {
+        if (!a || !wfRef) return false;
+        auto* root = wfRef->Get3D();
+        if (!root) return false;
+
+        RE::NiPoint3 bmin, bmax;
+        if (!BuildWorldAABB(root, bmin, bmax)) return false;
+
+        bmin.x -= padX;
+        bmax.x += padX;
+        bmin.y -= padY;
+        bmax.y += padY;
+        bmin.z -= padZ;
+        bmax.z += padZ;
+
+        const RE::NiPoint3 pFoot = a->GetPosition();
+        RE::NiPoint3 pHead = pFoot;
+        pHead.z = ActorHeadZ(a);
+
+        auto inside = [&](const RE::NiPoint3& p) {
+            return (p.x >= bmin.x && p.x <= bmax.x) && (p.y >= bmin.y && p.y <= bmax.y) &&
+                   (p.z >= bmin.z && p.z <= bmax.z);
+        };
+
+        if (requireBelowTop) {
+            const float topZ = bmax.z;
+            if (pFoot.z > topZ + 16.0f && pHead.z > topZ + 16.0f) return false;
+        }
+
+        return inside(pFoot) || inside(pHead);
+    }
+
     bool WetController::RayHitsCover(const RE::NiPoint3& from, const RE::NiPoint3& to,
                                      const RE::TESObjectREFR* ignoreRef) const {
         const RE::Actor* a = ignoreRef ? ignoreRef->As<RE::Actor>() : nullptr;
@@ -895,7 +1125,6 @@ namespace SWE {
         for (auto& [fid, wd] : _wet) {
             if (wd.wetness <= 0.0005f && wd.extSources.empty()) continue;
 
-            // Actor FormID
             intfc->WriteRecordData(&fid, sizeof(fid));
 
             // Wetness + lastAppliedWet

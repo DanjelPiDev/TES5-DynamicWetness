@@ -188,9 +188,6 @@ void __stdcall UI::WetConfig::RenderGeneral() {
                        "How often the logic runs. Higher = less frequent.")) {
             Settings::updateIntervalMs.store(upd);
         }
-
-        ImGui::Separator();
-        SaveResetRow(true);
     }
     FontAwesome::Pop();
 
@@ -209,6 +206,9 @@ void __stdcall UI::WetConfig::RenderGeneral() {
         }
         ImGui::TextDisabled("Other mods can call SWE.SetExternalWetness(actor, key, value[, durationSec]).");
     }
+
+    ImGui::Separator();
+    SaveResetRow(true);
 }
 
 void __stdcall UI::WetConfig::RenderSources() {
@@ -246,6 +246,40 @@ void __stdcall UI::WetConfig::RenderSources() {
                 Settings::secondsToDry.store(d);
             }
         }
+
+        ImGui::Separator();
+        {
+            bool wf = Settings::waterfallEnabled.load();
+            if (ImGui::Checkbox("Enable waterfall spray wetting", &wf)) Settings::waterfallEnabled.store(wf);
+        }
+        {
+            float r = Settings::secondsToSoakWaterfall.load();
+            if (FloatControl("Seconds to fully soak (Waterfall spray)", r, 1.0f, 3600.0f, "%.0f", 1.0f, 5.0f,
+                             "Time to reach 100% wetness when standing in/near a waterfall.")) {
+                Settings::secondsToSoakWaterfall.store(r);
+            }
+        }
+        {
+            float rad = Settings::nearWaterfallRadius.load();
+            if (FloatControl("Waterfall detection radius (units)", rad, 100.0f, 3000.0f, "%.0f", 10.0f, 50.0f,
+                             "How far to scan for waterfall FX around the actor.")) {
+                Settings::nearWaterfallRadius.store(rad);
+            }
+        }
+        ImGui::TextDisabled("FX bounds padding:");
+        {
+            float px = Settings::waterfallWidthPad.load();
+            if (FloatControl("Width pad (X)", px, 0.f, 300.f, "%.0f")) Settings::waterfallWidthPad.store(px);
+        }
+        {
+            float py = Settings::waterfallDepthPad.load();
+            if (FloatControl("Depth pad (Y)", py, 0.f, 400.f, "%.0f")) Settings::waterfallDepthPad.store(py);
+        }
+        {
+            float pz = Settings::waterfallZPad.load();
+            if (FloatControl("Height pad (Z)", pz, 0.f, 400.f, "%.0f")) Settings::waterfallZPad.store(pz);
+        }
+
         ImGui::Separator();
         {
             float ms = Settings::minSubmergeToSoak.load();

@@ -36,6 +36,13 @@ namespace Settings {
     extern std::atomic<float> minGlossiness;        // below this is considered non-glossy
     extern std::atomic<float> minSpecularStrength;  // below this is considered non-specular
 
+    extern std::atomic<bool> waterfallEnabled;
+    extern std::atomic<float> secondsToSoakWaterfall;
+    extern std::atomic<float> nearWaterfallRadius;
+    extern std::atomic<float> waterfallWidthPad;  // X
+    extern std::atomic<float> waterfallDepthPad;  // Y
+    extern std::atomic<float> waterfallZPad;
+
     extern std::atomic<float> nearFireRadius;
     extern std::atomic<float> dryMultiplierNearFire;
 

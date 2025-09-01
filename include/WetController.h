@@ -60,6 +60,8 @@ namespace SWE {
             std::chrono::steady_clock::time_point lastHeatProbe{};
             bool cachedNearHeat{false};
             std::unordered_map<std::string, ExternalSource> extSources;
+            std::chrono::steady_clock::time_point lastWaterfallProbe{};
+            bool cachedInsideWaterfall{false};
         };
 
         // Keyed by FormID to keep it simple and robust across handles
@@ -73,6 +75,8 @@ namespace SWE {
         bool IsActorInExteriorWet(RE::Actor* a) const;
         bool IsRainingOrSnowing() const;
         bool IsSnowingCurrent() const;
+        bool IsInsideWaterfallFX(const RE::Actor* a, const RE::TESObjectREFR* wfRef, float padX, float padY, float padZ,
+                                 bool requireBelowTop) const;
 
         bool IsNearHeatSource(const RE::Actor* a, float radius) const;
         bool RayHitsCover(const RE::NiPoint3& from, const RE::NiPoint3& to,

@@ -36,6 +36,14 @@ namespace Settings {
     std::atomic<float> minGlossiness{0.0f};
     std::atomic<float> minSpecularStrength{0.0f};
 
+    std::atomic<bool> waterfallEnabled{true};
+    std::atomic<float> secondsToSoakWaterfall{8.0f};
+    std::atomic<float> nearWaterfallRadius{128.0f};
+    std::atomic<float> waterfallWidthPad{45.0f};
+    std::atomic<float> waterfallDepthPad{64.0f};
+    std::atomic<float> waterfallZPad{51.0f};
+
+
     std::atomic<int> externalBlendMode{0};
     std::atomic<float> externalAddWeight{0.5f};
 
@@ -90,6 +98,13 @@ namespace Settings {
             apply_if(j, "minGlossiness", minGlossiness);
             apply_if(j, "minSpecularStrength", minSpecularStrength);
 
+            apply_if(j, "waterfallEnabled", waterfallEnabled);
+            apply_if(j, "secondsToSoakWaterfall", secondsToSoakWaterfall);
+            apply_if(j, "nearWaterfallRadius", nearWaterfallRadius);
+            apply_if(j, "waterfallWidthPad", waterfallWidthPad);
+            apply_if(j, "waterfallDepthPad", waterfallDepthPad);
+            apply_if(j, "waterfallZPad", waterfallZPad);
+
             apply_if(j, "nearFireRadius", nearFireRadius);
             apply_if(j, "dryMultiplierNearFire", dryMultiplierNearFire);
 
@@ -131,6 +146,13 @@ namespace Settings {
                       {"minGlossiness", minGlossiness.load()},
                       {"minSpecularStrength", minSpecularStrength.load()},
 
+                      {"waterfallEnabled", waterfallEnabled.load()},
+                      {"secondsToSoakWaterfall", secondsToSoakWaterfall.load()},
+                      {"nearWaterfallRadius", nearWaterfallRadius.load()},
+                      {"waterfallWidthPad", waterfallWidthPad.load()},
+                      {"waterfallDepthPad", waterfallDepthPad.load()},
+                      {"waterfallZPad", waterfallZPad.load()},
+
                       {"nearFireRadius", nearFireRadius.load()},
                       {"dryMultiplierNearFire", dryMultiplierNearFire.load()},
 
@@ -171,6 +193,13 @@ namespace Settings {
         maxSpecularStrength.store(10.0f);
         minGlossiness.store(0.0f);
         minSpecularStrength.store(0.0f);
+
+        waterfallEnabled.store(true);
+        secondsToSoakWaterfall.store(8.0f);
+        nearWaterfallRadius.store(640.0f);
+        waterfallWidthPad.store(45.0f);
+        waterfallDepthPad.store(64.0f);
+        waterfallZPad.store(51.0f);
 
         nearFireRadius.store(512.0f);
         dryMultiplierNearFire.store(3.0f);
