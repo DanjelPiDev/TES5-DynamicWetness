@@ -442,7 +442,12 @@ namespace SWE {
         w = clampf(w, 0.f, 1.f);
         wd.wetness = w;
 
-        if (std::abs(wd.lastAppliedWet - w) > 0.0025f) {
+        if (w <= 0.0005f) {
+            if (wd.lastAppliedWet > 0.0005f) {
+                ApplyWetnessMaterials(a, 0.0f);
+                wd.lastAppliedWet = 0.0f;
+            }
+        } else if (std::abs(wd.lastAppliedWet - w) > 0.0025f) {
             ApplyWetnessMaterials(a, w);
             wd.lastAppliedWet = w;
         }
@@ -459,9 +464,11 @@ namespace SWE {
         }
         RE::NiAVObject* roots[2] = {third, first};
 
-        const bool anyToggle = Settings::affectSkin.load() || Settings::affectHair.load() ||
-                               Settings::affectArmor.load() || Settings::affectWeapons.load();
-        if (!anyToggle) return;
+        if (wet > 0.0005f) {
+            const bool anyToggle = Settings::affectSkin.load() || Settings::affectHair.load() ||
+                                   Settings::affectArmor.load() || Settings::affectWeapons.load();
+            if (!anyToggle) return;
+        }
 
         const float maxGloss = Settings::maxGlossiness.load();
         const float maxSpec = Settings::maxSpecularStrength.load();
@@ -479,10 +486,12 @@ namespace SWE {
             if (!lsp) return;
 
             const MatCat cat = ClassifyGeom(g, lsp);
-            if ((cat == MatCat::SkinFace && !Settings::affectSkin.load()) ||
-                (cat == MatCat::Hair && !Settings::affectHair.load()) ||
-                (cat == MatCat::ArmorClothing && !Settings::affectArmor.load()) ||
-                (cat == MatCat::Weapon && !Settings::affectWeapons.load())) {
+            const bool toggledOff = (cat == MatCat::SkinFace && !Settings::affectSkin.load()) ||
+                                    (cat == MatCat::Hair && !Settings::affectHair.load()) ||
+                                    (cat == MatCat::ArmorClothing && !Settings::affectArmor.load()) ||
+                                    (cat == MatCat::Weapon && !Settings::affectWeapons.load());
+
+            if (toggledOff && wet > 0.0005f) {
                 return;
             }
 

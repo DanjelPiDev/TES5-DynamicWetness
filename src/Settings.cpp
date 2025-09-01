@@ -33,8 +33,8 @@ namespace Settings {
     std::atomic<float> specularScaleBoost{8.0f};
     std::atomic<float> maxGlossiness{800.0f};
     std::atomic<float> maxSpecularStrength{10.0f};
-    std::atomic<float> minGlossiness{40.0f};
-    std::atomic<float> minSpecularStrength{3.0f};
+    std::atomic<float> minGlossiness{0.0f};
+    std::atomic<float> minSpecularStrength{0.0f};
 
     std::atomic<float> nearFireRadius{512.0f};
     std::atomic<float> dryMultiplierNearFire{3.0f};
@@ -160,8 +160,8 @@ namespace Settings {
         specularScaleBoost.store(8.0f);
         maxGlossiness.store(800.0f);
         maxSpecularStrength.store(10.0f);
-        minGlossiness.store(40.0f);
-        minSpecularStrength.store(3.0f);
+        minGlossiness.store(0.0f);
+        minSpecularStrength.store(0.0f);
 
         nearFireRadius.store(512.0f);
         dryMultiplierNearFire.store(3.0f);
