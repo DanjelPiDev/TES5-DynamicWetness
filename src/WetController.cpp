@@ -4,6 +4,7 @@
 #include <functional>
 
 #include "Settings.h"
+#include "REL/Relocation.h"
 
 using namespace std::chrono_literals;
 
@@ -81,26 +82,33 @@ namespace SWE {
             }
         }
     }
-    static inline float EstimateSubmerge(RE::Actor* a) {
-        // TODO: improve with raycast? Not working properly for now.
+    static inline float GetSubmergedLevel(RE::Actor* a, float z, RE::TESObjectCELL* cell) {
+        using func_t = float (*)(RE::Actor*, float, RE::TESObjectCELL*);
+        static REL::Relocation<func_t> func{REL::RelocationID(36452, 37448)};
+        return func(a, z, cell);
+    }
+
+    static inline float ComputeSubmergeLevel(RE::Actor* a) {
         if (!a) return 0.0f;
+
+        if (auto* cell = a->GetParentCell()) {
+            const float z = a->GetPosition().z;
+            const float s = GetSubmergedLevel(a, z, cell);
+            if (s > 0.0f) {
+                return std::clamp(s, 0.0f, 1.0f);
+            }
+        }
 
         const auto& rd = a->GetActorRuntimeData();
         if (rd.boolFlags.any(RE::Actor::BOOL_FLAGS::kUnderwater)) return 1.0f;
-
         if (!(rd.boolBits.any(RE::Actor::BOOL_BITS::kInWater) || a->IsInWater())) return 0.0f;
 
         auto* root = a->Get3D();
-        if (!root) {
-            return rd.boolBits.any(RE::Actor::BOOL_BITS::kSwimming) ? 0.5f : 0.05f;
-        }
-
+        if (!root) return rd.boolBits.any(RE::Actor::BOOL_BITS::kSwimming) ? 0.5f : 0.05f;
         const auto& wb = root->worldBound;
         const float minZ = wb.center.z - wb.radius;
         const float maxZ = wb.center.z + wb.radius;
-
-        float waterZ = a->GetPosition().z;
-
+        const float waterZ = a->GetPosition().z;
         if (waterZ <= minZ) return 0.0f;
         if (waterZ >= maxZ) return 1.0f;
         const float h = std::max(0.0001f, (maxZ - minZ));
@@ -119,25 +127,18 @@ namespace SWE {
         if (!a) return false;
         const auto& rd = a->GetActorRuntimeData();
 
-        if (a->IsInWater()) return true;
+        const bool inWaterFlag = a->IsInWater() || rd.boolBits.any(RE::Actor::BOOL_BITS::kInWater);
+        const bool underwater = rd.boolFlags.any(RE::Actor::BOOL_FLAGS::kUnderwater);
+        const bool swimming = rd.boolBits.any(RE::Actor::BOOL_BITS::kSwimming);
 
-        if (rd.boolFlags.any(RE::Actor::BOOL_FLAGS::kUnderwater)) return true;
-
-        if (!(a->IsInWater() || rd.boolBits.any(RE::Actor::BOOL_BITS::kInWater) ||
-              rd.boolBits.any(RE::Actor::BOOL_BITS::kSwimming))) {
-            return false;
-        }
+        const bool hasContact = inWaterFlag || underwater || swimming;
+        if (!hasContact) return false;
 
         const float minSub = std::clamp(Settings::minSubmergeToSoak.load(), 0.0f, 0.99f);
-        if (minSub <= 0.0001f) {
-            return true;
-        }
+        if (minSub <= 0.0001f) return true;
 
-        float s = EstimateSubmerge(a);
-
-        if (rd.boolBits.any(RE::Actor::BOOL_BITS::kSwimming)) {
-            s = std::max(s, 0.5f);
-        }
+        float s = underwater ? 1.0f : ComputeSubmergeLevel(a);
+        if (swimming) s = std::max(s, 0.5f);
 
         return s >= minSub;
     }
