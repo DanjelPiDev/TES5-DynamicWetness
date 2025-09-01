@@ -24,10 +24,10 @@ namespace Settings {
     std::atomic<bool> affectArmor{true};
     std::atomic<bool> affectWeapons{true};
 
-    std::atomic<float> secondsToSoakWater{4.0f};
-    std::atomic<float> secondsToSoakRain{18.0f};
+    std::atomic<float> secondsToSoakWater{2.0f};
+    std::atomic<float> secondsToSoakRain{36.0f};
     std::atomic<float> secondsToDry{25.0f};
-    std::atomic<float> minSubmergeToSoak{0.15f};
+    std::atomic<float> minSubmergeToSoak{0.5f};
 
     std::atomic<float> glossinessBoost{120.0f};
     std::atomic<float> specularScaleBoost{8.0f};
@@ -154,19 +154,19 @@ namespace Settings {
         secondsToSoakWater.store(2.0f);
         secondsToSoakRain.store(36.0f);
         secondsToDry.store(40.0f);
-        minSubmergeToSoak.store(0.15f);
+        minSubmergeToSoak.store(0.5f);
 
         glossinessBoost.store(120.0f);
-        specularScaleBoost.store(2.0f);
-        maxGlossiness.store(300.0f);
-        maxSpecularStrength.store(3.5f);
+        specularScaleBoost.store(8.0f);
+        maxGlossiness.store(800.0f);
+        maxSpecularStrength.store(10.0f);
         minGlossiness.store(40.0f);
         minSpecularStrength.store(3.0f);
 
         nearFireRadius.store(512.0f);
         dryMultiplierNearFire.store(3.0f);
 
-        skinHairResponseMul.store(2.0f);
+        skinHairResponseMul.store(5.0f);
 
         updateIntervalMs.store(50);
     }
