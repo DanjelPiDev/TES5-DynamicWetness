@@ -342,7 +342,7 @@ namespace SWE {
     }
     
     static inline RE::hkVector4 ToHK(const RE::NiPoint3& p) {
-        const float s = RE::bhkWorld::GetWorldScale();  // ~0.0142857
+        const float s = RE::bhkWorld::GetWorldScale();
         return RE::hkVector4{p.x * s, p.y * s, p.z * s, 0.0f};
     }
 
