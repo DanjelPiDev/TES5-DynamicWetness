@@ -21,9 +21,17 @@ namespace SWE {
         void OnPreLoadGame();
         void OnPostLoadGame();
 
+        void Serialize(SKSE::SerializationInterface* intfc);
+        void Deserialize(SKSE::SerializationInterface* intfc, std::uint32_t version, std::uint32_t length);
+
         void RefreshNow();
         float GetPlayerWetness() const;
         void SetPlayerWetnessSnapshot(float w);
+
+        void SetExternalWetness(RE::Actor* a, std::string key, float value, float durationSec = -1.f);
+        void ClearExternalWetness(RE::Actor* a, std::string key);
+        float GetExternalWetness(RE::Actor* a, std::string key);
+        float GetFinalWetnessForActor(RE::Actor* a);
 
     private:
         WetController() = default;
@@ -38,6 +46,11 @@ namespace SWE {
         void TickGameThread();
         void ScheduleNextTick();
 
+        struct ExternalSource {
+            float value{0.f};             // 0...1
+            float expiryGameHours{-1.f};  // -1 = never
+        };
+
         struct WetData {
             float wetness{0.f};  // 0...1
             float lastAppliedWet{-1.f};
@@ -46,6 +59,7 @@ namespace SWE {
             bool lastRoofCovered{false};
             std::chrono::steady_clock::time_point lastHeatProbe{};
             bool cachedNearHeat{false};
+            std::unordered_map<std::string, ExternalSource> extSources;
         };
 
         // Keyed by FormID to keep it simple and robust across handles
@@ -64,6 +78,11 @@ namespace SWE {
         bool RayHitsCover(const RE::NiPoint3& from, const RE::NiPoint3& to,
                           const RE::TESObjectREFR* ignoreRef = nullptr) const;
         bool IsUnderRoof(RE::Actor* a) const;
+
+        float ApplyExternalSources(RE::Actor* a, WetData& wd, float baseWet);
+        float GetGameHours() const;
+
+        mutable std::recursive_mutex _mtx;
 
         struct MatSnapshot {
             float baseAlpha{1.f};

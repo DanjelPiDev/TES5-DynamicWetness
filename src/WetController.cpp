@@ -346,22 +346,6 @@ namespace SWE {
         return RE::hkVector4{p.x * s, p.y * s, p.z * s, 0.0f};
     }
 
-    static void LogOneHit(const char* tag, const RE::NiPoint3& from, const RE::NiPoint3& to,
-                          const RE::bhkPickData& pd) {
-        const float t = pd.rayOutput.hitFraction;
-        const RE::NiPoint3 hit{from.x + (to.x - from.x) * t, from.y + (to.y - from.y) * t,
-                               from.z + (to.z - from.z) * t};
-
-        const RE::hkpCollidable* col = pd.rayOutput.rootCollidable;
-        std::uint32_t layer = 0xFFFFFFFF, cfi = 0;
-        if (col) {
-            layer = static_cast<std::uint32_t>(col->GetCollisionLayer());
-            cfi = col->broadPhaseHandle.collisionFilterInfo;
-        }
-
-        spdlog::info("[SWE] HIT {}  t={:.3f}  at=({:.1f},{:.1f},{:.1f})  layer={} ({})  cfi=0x{:08X}", tag, t, hit.x,
-                     hit.y, hit.z, layer, LayerName(layer), cfi);
-    }
     static inline bool CastOnce(RE::bhkWorld* bw, const RE::NiPoint3& fromW, const RE::NiPoint3& toW,
                                 std::uint32_t filterInfo, bool enableCollectionFilter) {
         if (!bw) return false;
@@ -379,6 +363,13 @@ namespace SWE {
         pd.rayOutput.Reset();
 
         return bw->PickObject(pd) && pd.rayOutput.HasHit();
+    }
+    static std::string NormalizeKey(std::string key) {
+        key.erase(key.begin(), std::find_if(key.begin(), key.end(), [](unsigned char c) { return !std::isspace(c); }));
+        key.erase(std::find_if(key.rbegin(), key.rend(), [](unsigned char c) { return !std::isspace(c); }).base(),
+                  key.end());
+        std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c) { return std::tolower(c); });
+        return key;
     }
     
     void WetController::Install() {
@@ -572,6 +563,8 @@ namespace SWE {
         }
 
         w = clampf(w, 0.f, 1.f);
+        w = ApplyExternalSources(a, wd, w);
+
         wd.wetness = w;
 
         if (w <= 0.0005f) {
@@ -665,7 +658,7 @@ namespace SWE {
                 lsp->DoClearRenderPasses();
                 (void)lsp->SetupGeometry(g);
                 (void)lsp->FinishSetupGeometry(g);
-                propsTouched;
+                ++propsTouched;
                 return;
             }
 
@@ -796,5 +789,212 @@ namespace SWE {
             if (RayHitsCover(from, to, a)) return true;
         }
         return false;
+    }
+
+    float WetController::GetGameHours() const {
+        auto* cal = RE::Calendar::GetSingleton();
+        return cal ? cal->GetDaysPassed() * 24.0f : 0.0f;
+    }
+
+    void WetController::SetExternalWetness(RE::Actor* a, std::string key, float value, float durationSec) {
+        if (!a) return;
+        key = NormalizeKey(std::move(key));
+        if (key.empty()) return;
+        value = clampf(value, 0.f, 1.f);
+        std::scoped_lock l(_mtx);
+        auto& wd = _wet[a->GetFormID()];
+        auto& src = wd.extSources[key];
+        src.value = value;
+        if (durationSec > 0.f) {
+            src.expiryGameHours = GetGameHours() + (durationSec / 3600.f);
+        } else {
+            src.expiryGameHours = -1.f;
+        }
+    }
+
+    void WetController::ClearExternalWetness(RE::Actor* a, std::string key) {
+        if (!a) return;
+        key = NormalizeKey(std::move(key));
+        if (key.empty()) return;
+        std::scoped_lock l(_mtx);
+        auto itA = _wet.find(a->GetFormID());
+        if (itA == _wet.end()) return;
+        itA->second.extSources.erase(key);
+    }
+
+    float WetController::GetExternalWetness(RE::Actor* a, std::string key) {
+        if (!a) return 0.f;
+        key = NormalizeKey(std::move(key));
+        if (key.empty()) return 0.f;
+        std::scoped_lock l(_mtx);
+        auto itA = _wet.find(a->GetFormID());
+        if (itA == _wet.end()) return 0.f;
+        auto it = itA->second.extSources.find(key);
+        return (it != itA->second.extSources.end()) ? it->second.value : 0.f;
+    }
+
+    float WetController::GetFinalWetnessForActor(RE::Actor* a) {
+        if (!a) return 0.f;
+        std::scoped_lock l(_mtx);
+        auto it = _wet.find(a->GetFormID());
+        return (it != _wet.end()) ? it->second.wetness : 0.f;
+    }
+
+    float WetController::ApplyExternalSources(RE::Actor* a, WetData& wd, float baseWet) {
+        std::scoped_lock l(_mtx);
+        const float nowH = GetGameHours();
+
+        for (auto it = wd.extSources.begin(); it != wd.extSources.end();) {
+            if (it->second.expiryGameHours >= 0.f && nowH >= it->second.expiryGameHours)
+                it = wd.extSources.erase(it);
+            else
+                ++it;
+        }
+
+        if (wd.extSources.empty()) return baseWet;
+
+        float sum = 0.f, mx = 0.f;
+        for (auto& [k, s] : wd.extSources) {
+            sum += s.value;
+            mx = std::max(mx, s.value);
+        }
+
+        switch (Settings::externalBlendMode.load()) {
+            default:
+            case 0:
+                return std::max(baseWet, mx);
+            case 1:
+                return clampf(baseWet + sum, 0.f, 1.f);
+            case 2: {
+                float rest = std::max(0.f, sum - mx);
+                float w = clampf(Settings::externalAddWeight.load(), 0.f, 1.f);
+                return clampf(std::max(baseWet, mx) + rest * w, 0.f, 1.f);
+            }
+        }
+    }
+
+
+    /*
+    * =================================
+    * Serialization and Deserialization
+    * =================================
+    */
+    void WetController::Serialize(SKSE::SerializationInterface* intfc) {
+        std::scoped_lock l(_mtx);
+
+        // Header: Magic + Anzahl
+        const std::uint32_t magic = 'SWET';
+        intfc->WriteRecordData(&magic, sizeof(magic));
+
+        std::uint32_t count = 0;
+        for (auto& [fid, wd] : _wet) {
+            if (wd.wetness > 0.0005f || !wd.extSources.empty()) ++count;
+        }
+        intfc->WriteRecordData(&count, sizeof(count));
+
+        for (auto& [fid, wd] : _wet) {
+            if (wd.wetness <= 0.0005f && wd.extSources.empty()) continue;
+
+            // Actor FormID
+            intfc->WriteRecordData(&fid, sizeof(fid));
+
+            // Wetness + lastAppliedWet
+            intfc->WriteRecordData(&wd.wetness, sizeof(wd.wetness));
+            intfc->WriteRecordData(&wd.lastAppliedWet, sizeof(wd.lastAppliedWet));
+
+            // Externe sources
+            std::uint16_t n = static_cast<std::uint16_t>(std::min<std::size_t>(wd.extSources.size(), 0xFFFF));
+            intfc->WriteRecordData(&n, sizeof(n));
+            for (auto& [key, src] : wd.extSources) {
+                std::string k = key;
+                if (k.size() > 1024) k.resize(1024);
+                std::uint16_t klen = static_cast<std::uint16_t>(k.size());
+                intfc->WriteRecordData(&klen, sizeof(klen));
+                if (klen) intfc->WriteRecordData(k.data(), klen);
+
+                intfc->WriteRecordData(&src.value, sizeof(src.value));
+                intfc->WriteRecordData(&src.expiryGameHours, sizeof(src.expiryGameHours));
+            }
+        }
+    }
+
+    void WetController::Deserialize(SKSE::SerializationInterface* intfc, std::uint32_t version, std::uint32_t length) {
+        if (version == 1) {
+            float playerWet = 0.0f;
+            if (length >= sizeof(float)) {
+                intfc->ReadRecordData(&playerWet, sizeof(playerWet));
+            }
+            SetPlayerWetnessSnapshot(playerWet);
+            return;
+        }
+
+        auto read = [&](void* dst, std::uint32_t sz) -> bool { return intfc->ReadRecordData(dst, sz) == sz; };
+
+        std::uint32_t magic = 0;
+        if (!read(&magic, sizeof(magic)) || magic != 'SWET') {
+            return;
+        }
+
+        std::uint32_t count = 0;
+        if (!read(&count, sizeof(count))) return;
+
+        std::scoped_lock l(_mtx);
+        _wet.clear();
+
+        for (std::uint32_t i = 0; i < count; ++i) {
+            std::uint32_t oldFID = 0;
+            if (!read(&oldFID, sizeof(oldFID))) break;
+
+            std::uint32_t newFID = 0;
+            if (!intfc->ResolveFormID(oldFID, newFID)) {
+                float tmpWet, tmpLast;
+                std::uint16_t nsrc = 0;
+                if (!read(&tmpWet, sizeof(tmpWet)) || !read(&tmpLast, sizeof(tmpLast)) || !read(&nsrc, sizeof(nsrc)))
+                    break;
+                for (std::uint16_t s = 0; s < nsrc; ++s) {
+                    std::uint16_t klen = 0;
+                    if (!read(&klen, sizeof(klen))) break;
+                    if (klen) {
+                        std::string dump(klen, '\0');
+                        if (!read(dump.data(), klen)) break;
+                    }
+                    float v, exp;
+                    if (!read(&v, sizeof(v)) || !read(&exp, sizeof(exp))) break;
+                }
+                continue;
+            }
+
+            float wet = 0.f, last = -1.f;
+            std::uint16_t nsrc = 0;
+            if (!read(&wet, sizeof(wet)) || !read(&last, sizeof(last)) || !read(&nsrc, sizeof(nsrc))) break;
+
+            WetData wd{};
+            wd.wetness = clampf(wet, 0.f, 1.f);
+            wd.lastAppliedWet = -1.f;
+
+            for (std::uint16_t s = 0; s < nsrc; ++s) {
+                std::uint16_t klen = 0;
+                if (!read(&klen, sizeof(klen))) break;
+                std::string key;
+                if (klen) {
+                    key.resize(klen);
+                    if (!read(key.data(), klen)) break;
+                }
+                float v = 0.f, expH = -1.f;
+                if (!read(&v, sizeof(v)) || !read(&expH, sizeof(expH))) break;
+
+                std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c) { return std::tolower(c); });
+                key.erase(key.begin(),
+                          std::find_if(key.begin(), key.end(), [](unsigned char c) { return !std::isspace(c); }));
+                key.erase(
+                    std::find_if(key.rbegin(), key.rend(), [](unsigned char c) { return !std::isspace(c); }).base(),
+                    key.end());
+
+                wd.extSources[key] = ExternalSource{.value = clampf(v, 0.f, 1.f), .expiryGameHours = expH};
+            }
+
+            _wet[newFID] = std::move(wd);
+        }
+        SKSE::GetTaskInterface()->AddTask([this]() { this->RefreshNow(); });
     }
 }

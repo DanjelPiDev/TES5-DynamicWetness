@@ -193,6 +193,22 @@ void __stdcall UI::WetConfig::RenderGeneral() {
         SaveResetRow(true);
     }
     FontAwesome::Pop();
+
+    if (ImGui::CollapsingHeader("External Wetness (API)")) {
+        int mode = Settings::externalBlendMode.load();
+        if (ImGui::RadioButton("Max", mode == 0)) mode = 0;
+        ImGui::SameLine();
+        if (ImGui::RadioButton("Additive (cap 1.0)", mode == 1)) mode = 1;
+        ImGui::SameLine();
+        if (ImGui::RadioButton("Max + weighted rest", mode == 2)) mode = 2;
+        Settings::externalBlendMode.store(mode);
+
+        if (mode == 2) {
+            float w = Settings::externalAddWeight.load();
+            if (FloatControl("Rest weight", w, 0.f, 1.f, "%.2f")) Settings::externalAddWeight.store(w);
+        }
+        ImGui::TextDisabled("Other mods can call SWE.SetExternalWetness(actor, key, value[, durationSec]).");
+    }
 }
 
 void __stdcall UI::WetConfig::RenderSources() {

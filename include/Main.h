@@ -12,7 +12,7 @@ using namespace std::literals;
 #include "WetController.h"
 
 namespace SWE {
-    static constexpr std::uint32_t kSerVersion = 1;
+    static constexpr std::uint32_t kSerVersion = 2;
     static constexpr std::uint32_t kSerID = 'SWE1';
 
     void OnSave(SKSE::SerializationInterface* intfc);

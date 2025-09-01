@@ -36,6 +36,9 @@ namespace Settings {
     std::atomic<float> minGlossiness{0.0f};
     std::atomic<float> minSpecularStrength{0.0f};
 
+    std::atomic<int> externalBlendMode{0};
+    std::atomic<float> externalAddWeight{0.5f};
+
     std::atomic<float> nearFireRadius{512.0f};
     std::atomic<float> dryMultiplierNearFire{3.0f};
 
@@ -90,6 +93,9 @@ namespace Settings {
             apply_if(j, "nearFireRadius", nearFireRadius);
             apply_if(j, "dryMultiplierNearFire", dryMultiplierNearFire);
 
+            apply_if(j, "externalBlendMode", externalBlendMode);
+            apply_if(j, "externalAddWeight", externalAddWeight);
+
             apply_if(j, "skinHairResponseMul", skinHairResponseMul);
 
             apply_if(j, "updateIntervalMs", updateIntervalMs);
@@ -128,6 +134,9 @@ namespace Settings {
                       {"nearFireRadius", nearFireRadius.load()},
                       {"dryMultiplierNearFire", dryMultiplierNearFire.load()},
 
+                      {"externalBlendMode", externalBlendMode.load()},
+                      {"externalAddWeight", externalAddWeight.load()},
+
                       {"skinHairResponseMul", skinHairResponseMul.load()},
 
                       {"updateIntervalMs", updateIntervalMs.load()}};
@@ -165,6 +174,9 @@ namespace Settings {
 
         nearFireRadius.store(512.0f);
         dryMultiplierNearFire.store(3.0f);
+
+        externalBlendMode.store(0);
+        externalAddWeight.store(0.5f);
 
         skinHairResponseMul.store(5.0f);
 

@@ -1,37 +1,31 @@
 ﻿#include "Main.h"
+#include "PapyrusAPI.h"
 
 using namespace SKSE;
 
 namespace SWE {
 
     void OnSave(SKSE::SerializationInterface* intfc) {
-        auto* wc = WetController::GetSingleton();
-        float playerWet = wc ? wc->GetPlayerWetness() : 0.0f;
-        if (intfc->OpenRecord(kSerID, kSerVersion)) {
-            intfc->WriteRecordData(&playerWet, sizeof(playerWet));
+        if (auto* wc = WetController::GetSingleton()) {
+            if (intfc->OpenRecord(kSerID, kSerVersion)) {
+                wc->Serialize(intfc);
+            }
         }
     }
 
     void OnLoad(SKSE::SerializationInterface* intfc) {
         std::uint32_t type, version, length;
         while (intfc->GetNextRecordInfo(type, version, length)) {
-            if (type != kSerID || version != kSerVersion) {
+            if (type != kSerID) {
                 std::vector<char> skip(length);
                 if (length > 0) intfc->ReadRecordData(skip.data(), static_cast<std::uint32_t>(skip.size()));
                 continue;
             }
-            float playerWet = 0.0f;
-            if (length >= sizeof(float)) {
-                intfc->ReadRecordData(&playerWet, sizeof(playerWet));
+            if (auto* wc = WetController::GetSingleton()) {
+                wc->Deserialize(intfc, version, length);
             } else {
                 std::vector<char> skip(length);
                 if (length > 0) intfc->ReadRecordData(skip.data(), static_cast<std::uint32_t>(skip.size()));
-            }
-            if (auto* wc = WetController::GetSingleton()) {
-                wc->SetPlayerWetnessSnapshot(playerWet);
-                SKSE::GetTaskInterface()->AddTask([]() {
-                    if (auto* w = WetController::GetSingleton()) w->RefreshNow();
-                });
             }
         }
     }
@@ -62,6 +56,18 @@ static void SetupLog() {
 
 BOOL APIENTRY DllMain(HMODULE, DWORD, LPVOID) { return TRUE; }
 
+extern "C" {
+    __declspec(dllexport) void SWE_SetExternalWetness(RE::Actor* a, const char* key, float value, float durationSec) {
+        if (!a || !key) return;
+        SWE::WetController::GetSingleton()->SetExternalWetness(a, key, value, durationSec);
+    }
+    __declspec(dllexport) void SWE_ClearExternalWetness(RE::Actor* a, const char* key) {
+        if (!a || !key) return;
+        SWE::WetController::GetSingleton()->ClearExternalWetness(a, key);
+    }
+}
+
+
 extern "C" __declspec(dllexport) bool SKSEPlugin_Load(const SKSE::LoadInterface* skse) {
     SetupLog();
     SKSE::Init(skse);
@@ -79,6 +85,9 @@ extern "C" __declspec(dllexport) bool SKSEPlugin_Load(const SKSE::LoadInterface*
         switch (msg->type) {
             case SKSE::MessagingInterface::kDataLoaded:
                 wc->Install();
+                if (const auto pap = SKSE::GetPapyrusInterface(); pap) {
+                    pap->Register(SWE::Papyrus::Register);
+                }
                 SKSE::GetTaskInterface()->AddTask([]() { UI::Register(); });
                 break;
 
@@ -103,7 +112,6 @@ extern "C" __declspec(dllexport) bool SKSEPlugin_Load(const SKSE::LoadInterface*
                 break;
         }
     });
-
 
     return true;
 }

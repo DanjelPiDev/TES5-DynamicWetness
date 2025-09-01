@@ -41,6 +41,9 @@ namespace Settings {
 
     extern std::atomic<float> skinHairResponseMul;
 
+    extern std::atomic<int> externalBlendMode;  // 0=Max,1=Add,2=MaxPlusWeightedRest
+    extern std::atomic<float> externalAddWeight;
+
     extern std::atomic<int> updateIntervalMs;
 
     std::string DefaultPath();
