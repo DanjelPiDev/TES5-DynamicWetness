@@ -314,7 +314,17 @@ namespace SWE {
                     if (!a || a == player) continue;
                     if (useRad) {
                         const float d2 = a->GetPosition().GetSquaredDistance(pcPos);
-                        if (d2 > radiusSq) continue;
+
+                        if (d2 > radiusSq) {
+                            auto it = _wet.find(a->GetFormID());
+                            if (it != _wet.end() &&
+                                (it->second.lastAppliedWet > 0.0005f || it->second.wetness > 0.0005f)) {
+                                ApplyWetnessMaterials(a, 0.0f);
+                                it->second.wetness = 0.0f;
+                                it->second.lastAppliedWet = 0.0f;
+                            }
+                            continue;
+                        }
                     }
                     UpdateActorWetness(a, dt);
                 }
