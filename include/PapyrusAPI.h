@@ -28,6 +28,7 @@ namespace SWE::Papyrus {
     bool SetExternalWetnessMask(RE::StaticFunctionTag*, RE::Actor* a, RE::BSFixedString key, float value,
                                 float durationSec, std::int32_t catMask);
     bool ClearExternalWetness(RE::StaticFunctionTag*, RE::Actor* a, RE::BSFixedString key);
+    float GetBaseWetness(RE::StaticFunctionTag*, RE::Actor* a);
     float GetExternalWetness(RE::StaticFunctionTag*, RE::Actor* a, RE::BSFixedString key);
     float GetFinalWetness(RE::StaticFunctionTag*, RE::Actor* a);
     bool SetExternalWetnessMask(RE::StaticFunctionTag*, RE::Actor* a, RE::BSFixedString key, float value,

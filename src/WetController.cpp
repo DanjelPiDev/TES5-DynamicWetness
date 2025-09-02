@@ -770,6 +770,7 @@ namespace SWE {
         }
 
         w = clampf(w, 0.f, 1.f);
+        wd.baseWetness = w;
 
         float wetByCat[4]{};
         ComputeWetByCategory(wd, w, wetByCat, dt);
@@ -1194,6 +1195,13 @@ namespace SWE {
         src.flags = flags;
     }
     
+    float WetController::GetBaseWetnessForActor(RE::Actor* a) {
+        if (!a) return 0.f;
+        std::scoped_lock l(_mtx);
+        auto it = _wet.find(a->GetFormID());
+        return (it != _wet.end()) ? it->second.baseWetness : 0.f;
+    }
+
     void WetController::SetExternalWetnessEx(RE::Actor* a, std::string key, float value, float durationSec,
                                              std::uint8_t catMask, const OverrideParams& ov) {
         SetExternalWetnessMask(a, key, value, durationSec, catMask);

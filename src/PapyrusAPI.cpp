@@ -4,6 +4,9 @@
 #include "Settings.h"
 
 namespace SWE::Papyrus {
+    float GetBaseWetness(RE::StaticFunctionTag*, RE::Actor* a) {
+        return SWE::WetController::GetSingleton()->GetBaseWetnessForActor(a);
+    }
     bool SetExternalWetness(RE::StaticFunctionTag*, RE::Actor* a, RE::BSFixedString key, float value,
                             float durationSec) {
         SWE::WetController::GetSingleton()->SetExternalWetness(a, key.c_str(), value, durationSec);
@@ -68,6 +71,7 @@ namespace SWE::Papyrus {
         vm->RegisterFunction("IsNearHeatSource", "SWE", IsNearHeatSource);
         vm->RegisterFunction("IsUnderRoof", "SWE", IsUnderRoof);
         vm->RegisterFunction("IsActorInExteriorWet", "SWE", IsActorInExteriorWet);
+        vm->RegisterFunction("GetBaseWetness", "SWE", GetBaseWetness);
         return true;
     }
 }
