@@ -21,7 +21,6 @@ namespace {
             ImGui::EndTooltip();
         }
     }
-
     static float DefaultInputWidthForFormat(const char* fmt) {
         const char* sample = (strstr(fmt, ".2f") || strstr(fmt, "%.2f"))   ? "-00000.00"
                              : (strstr(fmt, ".1f") || strstr(fmt, "%.1f")) ? "-00000.0"
@@ -384,6 +383,38 @@ void __stdcall UI::WetConfig::RenderMaterials() {
         }
 
         ImGui::Separator();
+
+        {
+            bool pbr = Settings::pbrFriendlyMode.load();
+            if (ImGui::Checkbox("PBR-friendly for Armor/Weapons", &pbr)) Settings::pbrFriendlyMode.store(pbr);
+            ImGui::SameLine();
+            ImGui::TextDisabled("(Community Shaders PBR / roughness-metalness)");
+
+            if (pbr) {
+                ImGui::TextDisabled("Use milder caps on Armor/Weapons and do not force specular on likely PBR sets.");
+                float mul = Settings::pbrArmorWeapMul.load();
+                if (FloatControl("Armor/Weapons response × (PBR)", mul, 0.0f, 1.0f, "%.2f", 0.01f, 0.1f,
+                                 "Scales gloss/spec boosts for armor/weapons when PBR mode is enabled.")) {
+                    Settings::pbrArmorWeapMul.store(mul);
+                }
+                {
+                    float gmx = Settings::pbrMaxGlossArmor.load();
+                    if (FloatControl("PBR Max Glossiness (Armor/Weapons)", gmx, 1.0f, 10000.0f, "%.0f", 10.0f, 50.0f,
+                                     "Extra clamp applied on armor/weapons in PBR mode.")) {
+                        Settings::pbrMaxGlossArmor.store(gmx);
+                    }
+                }
+                {
+                    float smx = Settings::pbrMaxSpecArmor.load();
+                    if (FloatControl("PBR Max Specular Strength (Armor/Weapons)", smx, 0.1f, 1000.0f, "%.2f", 0.1f,
+                                     1.0f, "Extra clamp applied on armor/weapons in PBR mode.")) {
+                        Settings::pbrMaxSpecArmor.store(smx);
+                    }
+                }
+                ImGui::Separator();
+            }
+        }
+
         SaveResetRow(true);
     }
     FontAwesome::Pop();
@@ -399,6 +430,305 @@ void __stdcall UI::WetConfig::RenderNPCs() {
         if (IntControl("NPC Radius (0 = All loaded)", r, 0, 16384, "%d", 64, 256,
                        "Actors outside the radius are set dry immediately.")) {
             Settings::npcRadius.store(r);
+        }
+
+        bool optin = Settings::npcOptInOnly.load();
+        if (ImGui::Checkbox("Opt-in tracking only (use list below)", &optin)) {
+            Settings::npcOptInOnly.store(optin);
+        }
+        ImGui::TextDisabled("When enabled, only NPCs you add to the list will be updated in rain/waterfall/water.");
+
+        ImGui::Separator();
+
+        auto add_override_if_missing = [](std::uint32_t fid) {
+            auto& ov = Settings::actorOverrides;
+            auto it = std::find_if(ov.begin(), ov.end(), [&](const Settings::FormSpec& fs) { return fs.id == fid; });
+            if (it == ov.end()) {
+                Settings::FormSpec fs{};
+                fs.plugin = "";
+                fs.id = fid;
+                fs.value = 1.0f;
+                fs.enabled = false;
+                fs.mask = 0x0F;
+                ov.push_back(std::move(fs));
+            }
+        };
+
+        auto contains_icase = [](const std::string& hay, const std::string& needle) {
+            if (needle.empty()) return true;
+            auto tolow = [](std::string s) {
+                std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+                return s;
+            };
+            std::string H = tolow(hay), N = tolow(needle);
+            return H.find(N) != std::string::npos;
+        };
+
+        // Tracked NPCs (Opt-in)
+        if (ImGui::TreeNodeEx("Tracked NPCs (for Opt-in mode)", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::TextDisabled("When 'Opt-in tracking only' is enabled, only these actors will be updated.");
+            auto& vec = Settings::trackedActors;
+
+            if (ImGui::Button("Add nearby NPCs…")) ImGui::OpenPopup("swe_add_tracked_nearby");
+            ImGui::SameLine();
+            static char addHex2[16] = "";
+            ImGui::SetNextItemWidth(140);
+            ImGui::InputTextWithHint("##addTrackedHex", "FormID (hex)", addHex2, IM_ARRAYSIZE(addHex2),
+                                     ImGuiInputTextFlags_CharsHexadecimal);
+            ImGui::SameLine();
+            if (ImGui::Button("Add by FormID##trk")) {
+                std::uint32_t id = 0;
+                if (std::strlen(addHex2) > 0) {
+                    std::string s = addHex2;
+                    if (s.rfind("0x", 0) == 0 || s.rfind("0X", 0) == 0) s = s.substr(2);
+                    auto res = std::from_chars(s.data(), s.data() + s.size(), id, 16);
+                    if (res.ec == std::errc()) {
+                        Settings::trackedActors.push_back({/*plugin*/ "", id, 1.0f, true});
+                        add_override_if_missing(id);
+                        SWE::WetController::GetSingleton()->RefreshNow();
+                    }
+                }
+            }
+
+            if (ImGui::BeginPopup("swe_add_tracked_nearby")) {
+                static char filter2[48] = "";
+                ImGui::InputTextWithHint("##ftrk", "Filter by name…", filter2, IM_ARRAYSIZE(filter2));
+                ImGui::Separator();
+                if (auto* proc = RE::ProcessLists::GetSingleton()) {
+                    RE::Actor* pc = RE::PlayerCharacter::GetSingleton();
+                    ImGui::BeginChild("trk_near", ImVec2(0, 240), true);
+                    for (auto& h : proc->highActorHandles) {
+                        RE::NiPointer<RE::Actor> ap = h.get();
+                        RE::Actor* a = ap.get();
+                        if (!a || a == pc) continue;
+                        auto* ab = a->GetActorBase();
+                        if (!ab) continue;
+                        const char* nm = ab->GetName();
+                        std::string name = nm ? nm : "(no name)";
+                        if (filter2[0] && name.find(filter2) == std::string::npos) continue;
+                        std::uint32_t fid = ab->GetFormID();
+                        ImGui::PushID(static_cast<int>(fid));
+                        ImGui::Text("%s  [0x%08X]", name.c_str(), fid);
+                        ImGui::SameLine();
+                        if (ImGui::SmallButton("Add")) {
+                            vec.push_back({"", fid, 1.0f, true});
+                            SWE::WetController::GetSingleton()->RefreshNow();
+                        }
+                        ImGui::PopID();
+                    }
+                    ImGui::EndChild();
+                }
+                if (ImGui::Button("Close")) ImGui::CloseCurrentPopup();
+                ImGui::EndPopup();
+            }
+
+            if (ImGui::BeginTable("trk_tbl", 4, ImGuiTableFlags_Resizable | ImGuiTableFlags_Borders)) {
+                ImGui::TableSetupColumn("Actor");
+                ImGui::TableSetupColumn("FormID");
+                ImGui::TableSetupColumn("Enabled");
+                ImGui::TableSetupColumn("Remove");
+                ImGui::TableHeadersRow();
+                for (int i = 0; i < static_cast<int>(vec.size()); ++i) {
+                    auto& fs = vec[i];
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    const char* nm = "";
+                    if (auto* npc = RE::TESForm::LookupByID<RE::TESNPC>(fs.id)) nm = npc->GetName();
+                    ImGui::TextUnformatted(nm && nm[0] ? nm : "(unknown)");
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::Text("0x%08X", fs.id);
+                    ImGui::TableSetColumnIndex(2);
+                    {
+                        bool enb = fs.enabled;
+                        if (ImGui::Checkbox(("##enT" + std::to_string(i)).c_str(), &enb)) {
+                            fs.enabled = enb;
+                            SWE::WetController::GetSingleton()->RefreshNow();
+                        }
+                    }
+                    ImGui::TableSetColumnIndex(3);
+                    if (ImGui::SmallButton(("Remove##t" + std::to_string(i)).c_str())) {
+                        vec.erase(vec.begin() + i);
+                        SWE::WetController::GetSingleton()->RefreshNow();
+                        --i;
+                    }
+                }
+                ImGui::EndTable();
+            }
+            ImGui::TreePop();
+        }
+
+        ImGui::Separator();
+
+        // Per-Actor Overrides
+        if (ImGui::TreeNodeEx("Per-Actor Wetness Overrides", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::TextDisabled("Force selected actors to always render at a fixed wetness value (0..1).");
+            auto& vec = Settings::actorOverrides;
+
+            // Controls row
+            if (ImGui::Button("Add nearby NPCs…")) ImGui::OpenPopup("swe_add_override_nearby");
+            ImGui::SameLine();
+            static char addHex[16] = "";
+            ImGui::SetNextItemWidth(140);
+            ImGui::InputTextWithHint("##addOverrideHex", "FormID (hex)", addHex, IM_ARRAYSIZE(addHex),
+                                     ImGuiInputTextFlags_CharsHexadecimal);
+            ImGui::SameLine();
+            if (ImGui::Button("Add by FormID")) {
+                std::uint32_t id = 0;
+                if (std::strlen(addHex) > 0) {
+                    std::string s = addHex;
+                    if (s.rfind("0x", 0) == 0 || s.rfind("0X", 0) == 0) s = s.substr(2);
+                    auto res = std::from_chars(s.data(), s.data() + s.size(), id, 16);
+                    if (res.ec == std::errc()) {
+                        Settings::actorOverrides.push_back({/*plugin*/ "", id, 1.0f, true});
+                        SWE::WetController::GetSingleton()->RefreshNow();
+                    }
+                }
+            }
+            ImGui::SameLine();
+            static char addName2[64] = "";
+            ImGui::SetNextItemWidth(180);
+            ImGui::InputTextWithHint("##addTrackedName", "Name contains...", addName2, IM_ARRAYSIZE(addName2));
+            ImGui::SameLine();
+            if (ImGui::Button("Find by Name##trk")) {
+                ImGui::OpenPopup("swe_add_tracked_by_name");
+            }
+
+            if (ImGui::BeginPopup("swe_add_tracked_by_name")) {
+                int added = 0;
+                if (auto* proc = RE::ProcessLists::GetSingleton()) {
+                    RE::Actor* pc = RE::PlayerCharacter::GetSingleton();
+                    ImGui::BeginChild("trk_by_name", ImVec2(0, 240), true);
+                    for (auto& h : proc->highActorHandles) {
+                        RE::NiPointer<RE::Actor> ap = h.get();
+                        RE::Actor* a = ap.get();
+                        if (!a || a == pc) continue;
+                        auto* ab = a->GetActorBase();
+                        if (!ab) continue;
+                        const char* nm = ab->GetName();
+                        std::string name = nm ? nm : "(no name)";
+                        if (!contains_icase(name, addName2)) continue;
+                        std::uint32_t fid = ab->GetFormID();
+
+                        ImGui::PushID(static_cast<int>(fid));
+                        ImGui::Text("%s  [0x%08X]", name.c_str(), fid);
+                        ImGui::SameLine();
+                        if (ImGui::SmallButton("Add")) {
+                            // tracked
+                            Settings::trackedActors.push_back({"", fid, 1.0f, true});
+                            add_override_if_missing(fid);
+                            SWE::WetController::GetSingleton()->RefreshNow();
+                            ++added;
+                        }
+                        ImGui::PopID();
+                    }
+                    ImGui::EndChild();
+                }
+                if (ImGui::Button("Close")) ImGui::CloseCurrentPopup();
+                ImGui::EndPopup();
+            }
+
+            // Nearby picker popup
+            if (ImGui::BeginPopup("swe_add_override_nearby")) {
+                static char filter[48] = "";
+                ImGui::InputTextWithHint("##fovr", "Filter by name…", filter, IM_ARRAYSIZE(filter));
+                ImGui::Separator();
+                if (auto* proc = RE::ProcessLists::GetSingleton()) {
+                    RE::Actor* pc = RE::PlayerCharacter::GetSingleton();
+                    ImGui::BeginChild("ovr_near", ImVec2(0, 240), true);
+                    for (auto& h : proc->highActorHandles) {
+                        RE::NiPointer<RE::Actor> ap = h.get();
+                        RE::Actor* a = ap.get();
+                        if (!a || a == pc) continue;
+                        auto* ab = a->GetActorBase();
+                        if (!ab) continue;
+                        const char* nm = ab->GetName();
+                        std::string name = nm ? nm : "(no name)";
+                        if (filter[0] && name.find(filter) == std::string::npos) continue;
+                        std::uint32_t fid = ab->GetFormID();
+                        ImGui::PushID(static_cast<int>(fid));
+                        ImGui::Text("%s  [0x%08X]", name.c_str(), fid);
+                        ImGui::SameLine();
+                        if (ImGui::SmallButton("Add")) {
+                            vec.push_back({"", fid, 1.0f, true});
+                            add_override_if_missing(fid);
+                            SWE::WetController::GetSingleton()->RefreshNow();
+                        }
+                        ImGui::PopID();
+                    }
+                    ImGui::EndChild();
+                }
+                if (ImGui::Button("Close")) ImGui::CloseCurrentPopup();
+                ImGui::EndPopup();
+            }
+
+            // Table
+            if (ImGui::BeginTable("ovr_tbl", 5, ImGuiTableFlags_Resizable | ImGuiTableFlags_Borders)) {
+                ImGui::TableSetupColumn("Actor");
+                ImGui::TableSetupColumn("Wetness (0..1)");
+                ImGui::TableSetupColumn("Categories");
+                ImGui::TableSetupColumn("Enabled");
+                ImGui::TableSetupColumn("Remove");
+                ImGui::TableHeadersRow();
+
+                for (int i = 0; i < static_cast<int>(vec.size()); ++i) {
+                    auto& fs = vec[i];
+                    ImGui::TableNextRow();
+
+                    // Actor name
+                    ImGui::TableSetColumnIndex(0);
+                    const char* nm = "";
+                    if (auto* npc = RE::TESForm::LookupByID<RE::TESNPC>(fs.id)) nm = npc->GetName();
+                    ImGui::TextUnformatted(nm && nm[0] ? nm : "(unknown)");
+
+                    // Wetness
+                    ImGui::TableSetColumnIndex(1);
+                    float v = fs.value;
+                    if (ImGui::SliderFloat(("##w" + std::to_string(i)).c_str(), &v, 0.0f, 1.0f, "%.2f",
+                                           ImGuiSliderFlags_AlwaysClamp)) {
+                        fs.value = v;
+                        SWE::WetController::GetSingleton()->RefreshNow();
+                    }
+
+                    // Categories (Mask)  bit0=Skin,1=Hair,2=Armor,3=Weapon
+                    ImGui::TableSetColumnIndex(2);
+                    bool mSkin = (fs.mask & 0x01) != 0;
+                    bool mHair = (fs.mask & 0x02) != 0;
+                    bool mArmor = (fs.mask & 0x04) != 0;
+                    bool mWeapon = (fs.mask & 0x08) != 0;
+
+                    ImGui::Checkbox(("Skin##" + std::to_string(i)).c_str(), &mSkin);
+                    ImGui::SameLine();
+                    ImGui::Checkbox(("Hair##" + std::to_string(i)).c_str(), &mHair);
+                    ImGui::SameLine();
+                    ImGui::Checkbox(("Armor##" + std::to_string(i)).c_str(), &mArmor);
+                    ImGui::SameLine();
+                    ImGui::Checkbox(("Weap##" + std::to_string(i)).c_str(), &mWeapon);
+
+                    std::uint8_t newMask = (mSkin ? 1 : 0) | (mHair ? 2 : 0) | (mArmor ? 4 : 0) | (mWeapon ? 8 : 0);
+                    if (newMask != fs.mask) {
+                        fs.mask = newMask;
+                        if (newMask == 0) fs.enabled = false;
+                        SWE::WetController::GetSingleton()->RefreshNow();
+                    }
+
+                    ImGui::TableSetColumnIndex(3);
+                    bool enb = fs.enabled;
+                    if (ImGui::Checkbox(("##en" + std::to_string(i)).c_str(), &enb)) {
+                        fs.enabled = enb;
+                        SWE::WetController::GetSingleton()->RefreshNow();
+                    }
+
+                    ImGui::TableSetColumnIndex(4);
+                    if (ImGui::SmallButton(("Remove##" + std::to_string(i)).c_str())) {
+                        vec.erase(vec.begin() + i);
+                        SWE::WetController::GetSingleton()->RefreshNow();
+                        --i;
+                    }
+                }
+                ImGui::EndTable();
+            }
+
+            ImGui::TreePop();
         }
 
         ImGui::Separator();

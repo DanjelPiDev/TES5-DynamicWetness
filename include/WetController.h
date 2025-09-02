@@ -70,7 +70,7 @@ namespace SWE {
         struct ExternalSource {
             float value{0.f};             // 0...1
             float expiryRemainingSec = -1.f;
-            std::uint8_t catMask{0x0F};
+            std::uint8_t catMask{0};
             std::uint32_t flags = 0;  // behavior flags
             OverrideParams ov;
         };
@@ -111,7 +111,7 @@ namespace SWE {
         bool RayHitsCover(const RE::NiPoint3& from, const RE::NiPoint3& to,
                           const RE::TESObjectREFR* ignoreRef = nullptr) const;
 
-        void ComputeWetByCategory(WetData& wd, float baseWet, float outWetByCat[4], float dt);
+        void ComputeWetByCategory(WetData& wd, float baseWet, float outWetByCat[4], float dt, bool envDominates);
         float GetGameHours() const;
 
         mutable std::recursive_mutex _mtx;

@@ -14,6 +14,7 @@ namespace Settings {
     std::atomic<bool> modEnabled{true};
     std::atomic<bool> affectNPCs{false};
     std::atomic<int> npcRadius{4096};
+    std::atomic<bool> npcOptInOnly{false};
 
     std::atomic<bool> rainSnowEnabled{true};
     std::atomic<bool> affectInSnow{false};
@@ -53,6 +54,73 @@ namespace Settings {
     std::atomic<float> skinHairResponseMul{5.0f};
 
     std::atomic<int> updateIntervalMs{50};
+
+    std::atomic<bool> pbrFriendlyMode{false};
+    std::atomic<float> pbrArmorWeapMul{0.5f};
+    std::atomic<float> pbrMaxGlossArmor{300.0f};
+    std::atomic<float> pbrMaxSpecArmor{5.0f};
+
+    std::vector<FormSpec> actorOverrides;
+    std::vector<FormSpec> trackedActors;
+
+    static std::uint32_t parse_form_id(const nlohmann::json& jv) {
+        // Accept either number or hex string "0xXXXXXXXX"/"XXXXXXXX"
+        if (jv.is_number_unsigned()) return jv.get<std::uint32_t>();
+        if (jv.is_string()) {
+            std::string s = jv.get<std::string>();
+            // strip 0x if present
+            if (s.rfind("0x", 0) == 0 || s.rfind("0X", 0) == 0) s = s.substr(2);
+            std::uint32_t out = 0;
+            auto res = std::from_chars(s.data(), s.data() + s.size(), out, 16);
+            if (res.ec == std::errc()) return out;
+        }
+        return 0;
+    }
+
+    static void load_formspec_array(const nlohmann::json& j, const char* key, std::vector<FormSpec>& out) {
+        if (!j.contains(key) || !j.at(key).is_array()) return;
+        out.clear();
+        for (const auto& e : j.at(key)) {
+            try {
+                FormSpec fs{};
+                if (e.contains("plugin")) fs.plugin = e.at("plugin").get<std::string>();
+                if (e.contains("id")) fs.id = parse_form_id(e.at("id"));
+                if (e.contains("value")) fs.value = std::clamp(e.at("value").get<float>(), 0.0f, 1.0f);
+                if (e.contains("enabled")) fs.enabled = e.at("enabled").get<bool>();
+                if (e.contains("mask")) {
+                    if (e.at("mask").is_number_unsigned()) {
+                        fs.mask = static_cast<std::uint8_t>(e.at("mask").get<unsigned>() & 0x0F);
+                    } else if (e.at("mask").is_string()) {
+                        std::string ms = e.at("mask").get<std::string>();
+                        if (ms.rfind("0x", 0) == 0 || ms.rfind("0X", 0) == 0) ms = ms.substr(2);
+                        unsigned mv = 0;
+                        auto res = std::from_chars(ms.data(), ms.data() + ms.size(), mv, 16);
+                        if (res.ec == std::errc()) fs.mask = static_cast<std::uint8_t>(mv & 0x0F);
+                    }
+                }
+                if (fs.id != 0) out.push_back(std::move(fs));
+            } catch (...) {
+            }
+        }
+    }
+
+    static nlohmann::json dump_formspec_array(const std::vector<FormSpec>& v) {
+        nlohmann::json arr = nlohmann::json::array();
+        for (const auto& fs : v) {
+            char idbuf[11]{};
+            std::snprintf(idbuf, sizeof(idbuf), "0x%08X", fs.id);
+            char maskbuf[5]{};
+            std::snprintf(maskbuf, sizeof(maskbuf), "0x%X", (unsigned)(fs.mask & 0x0F));
+            arr.push_back({
+                {"plugin", fs.plugin},
+                {"id", std::string(idbuf)},
+                {"value", std::clamp(fs.value, 0.0f, 1.0f)},
+                {"enabled", fs.enabled},
+                {"mask", std::string(maskbuf)},
+            });
+        }
+        return arr;
+    }
 
     static void apply_if(json& j, const char* key, auto& ref) {
         if (j.contains(key)) {
@@ -114,6 +182,15 @@ namespace Settings {
             apply_if(j, "skinHairResponseMul", skinHairResponseMul);
 
             apply_if(j, "updateIntervalMs", updateIntervalMs);
+
+            apply_if(j, "pbrFriendlyMode", pbrFriendlyMode);
+            apply_if(j, "pbrArmorWeapMul", pbrArmorWeapMul);
+            apply_if(j, "pbrMaxGlossArmor", pbrMaxGlossArmor);
+            apply_if(j, "pbrMaxSpecArmor", pbrMaxSpecArmor);
+
+            apply_if(j, "npcOptInOnly", npcOptInOnly);
+            load_formspec_array(j, "actorOverrides", actorOverrides);
+            load_formspec_array(j, "trackedActors", trackedActors);
         } catch (...) {
         }
     }
@@ -161,7 +238,16 @@ namespace Settings {
 
                       {"skinHairResponseMul", skinHairResponseMul.load()},
 
+                      {"npcOptInOnly", npcOptInOnly.load()},
+
+                      {"pbrFriendlyMode", pbrFriendlyMode.load()},
+                      {"pbrArmorWeapMul", pbrArmorWeapMul.load()},
+                      {"pbrMaxGlossArmor", pbrMaxGlossArmor.load()},
+                      {"pbrMaxSpecArmor", pbrMaxSpecArmor.load()},
+
                       {"updateIntervalMs", updateIntervalMs.load()}};
+            j["actorOverrides"] = dump_formspec_array(actorOverrides);
+            j["trackedActors"] = dump_formspec_array(trackedActors);
             std::ofstream o(path, std::ios::trunc);
             o << j.dump(2);
         } catch (...) {
@@ -172,6 +258,7 @@ namespace Settings {
         modEnabled.store(true);
         affectNPCs.store(false);
         npcRadius.store(4096);
+        npcOptInOnly.store(false);
 
         rainSnowEnabled.store(false);
         affectInSnow.store(false);
@@ -210,5 +297,13 @@ namespace Settings {
         skinHairResponseMul.store(5.0f);
 
         updateIntervalMs.store(50);
+
+        pbrFriendlyMode.store(false);
+        pbrArmorWeapMul.store(0.5f);
+        pbrMaxGlossArmor.store(300.0f);
+        pbrMaxSpecArmor.store(5.0f);
+
+        actorOverrides.clear();
+        trackedActors.clear();
     }
 }

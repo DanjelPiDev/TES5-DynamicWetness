@@ -316,6 +316,33 @@ namespace SWE {
         }
         return false;
     }
+    static bool MaterialLooksPBR(RE::BSLightingShaderMaterialBase* mb) {
+        if (!mb) return false;
+        RE::BSTextureSet* ts = mb->textureSet.get();
+        auto hasKey = [](const char* p, std::string_view key) {
+            if (!p || !p[0]) return false;
+            std::string s(p);
+            std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return std::tolower(c); });
+            return s.find(key) != std::string::npos;
+        };
+        auto slot = [&](RE::BSTextureSet::Texture t) -> const char* { return ts ? ts->GetTexturePath(t) : nullptr; };
+
+        const char* d = slot(RE::BSTextureSet::Texture::kDiffuse);
+        const char* n = slot(RE::BSTextureSet::Texture::kNormal);
+        const char* s0 = slot(RE::BSTextureSet::Texture::kSpecular);
+        const char* g = slot(RE::BSTextureSet::Texture::kGlowMap);
+        const char* e = slot(RE::BSTextureSet::Texture::kEnvironmentMask);
+        const char* b = slot(RE::BSTextureSet::Texture::kBacklightMask);
+
+        auto looks = [&](const char* p) {
+            return hasKey(p, "rough") || hasKey(p, "metal") || hasKey(p, "_rm") || hasKey(p, "_orm") ||
+                   hasKey(p, ".orm") || hasKey(p, ".rma") || hasKey(p, "_rma") || hasKey(p, "/pbr") ||
+                   hasKey(p, "\\pbr");
+        };
+        // check a few likely slots
+        if (looks(d) || looks(n) || looks(s0) || looks(g) || looks(e) || looks(b)) return true;
+        return false;
+    }
     static MatCat ClassifyGeom(RE::BSGeometry* g, RE::BSLightingShaderProperty* lsp) {
         if (lsp && lsp->material) {
             if (auto* mb = static_cast<RE::BSLightingShaderMaterialBase*>(lsp->material)) {
@@ -624,6 +651,14 @@ namespace SWE {
 
         if (Settings::affectNPCs.load()) {
             if (auto* proc = RE::ProcessLists::GetSingleton()) {
+                std::unordered_set<std::uint32_t> allow;
+                const bool optIn = Settings::npcOptInOnly.load();
+                if (optIn) {
+                    for (const auto& fs : Settings::trackedActors) {
+                        if (fs.enabled && fs.id != 0) allow.insert(fs.id);
+                    }
+                }
+
                 const int radius = Settings::npcRadius.load();
                 const bool useRad = (radius > 0);
                 const float radiusSq = static_cast<float>(radius) * static_cast<float>(radius);
@@ -633,6 +668,23 @@ namespace SWE {
                     RE::NiPointer<RE::Actor> ap = h.get();
                     RE::Actor* a = ap.get();
                     if (!a || a == player) continue;
+
+                    if (optIn) {
+                        std::uint32_t baseID = 0;
+                        if (auto* ab = a->GetActorBase()) baseID = ab->GetFormID();
+                        if (allow.find(baseID) == allow.end()) {
+                            auto it = _wet.find(a->GetFormID());
+                            if (it != _wet.end() &&
+                                (it->second.lastAppliedWet > 0.0005f || it->second.wetness > 0.0005f)) {
+                                const float zeros[4]{0, 0, 0, 0};
+                                ApplyWetnessMaterials(a, zeros);
+                                it->second.wetness = 0.0f;
+                                it->second.lastAppliedWet = 0.0f;
+                            }
+                            continue;
+                        }
+                    }
+
                     if (useRad) {
                         const float d2 = a->GetPosition().GetSquaredDistance(pcPos);
 
@@ -656,6 +708,21 @@ namespace SWE {
 
     void WetController::UpdateActorWetness(RE::Actor* a, float dt) {
         if (!a) return;
+
+        auto getOverride = [&](float& outW, std::uint8_t& outMask) -> bool {
+            if (auto* ab = a->GetActorBase()) {
+                const std::uint32_t fid = ab->GetFormID();
+                for (const auto& fs : Settings::actorOverrides) {
+                    if (!fs.enabled || fs.id == 0) continue;
+                    if (fs.id == fid) {
+                        outW = clampf(fs.value, 0.0f, 1.0f);
+                        outMask = (fs.mask & 0x0F);
+                        return true;
+                    }
+                }
+            }
+            return false;
+        };
 
         auto& wd = _wet[a->GetFormID()];
         wd.lastSeen = std::chrono::steady_clock::now();
@@ -758,6 +825,8 @@ namespace SWE {
 
         float w = wd.wetness;
 
+        const bool envDominates = inWater || nearWaterfall || inPrecipOnActor;
+
         if (inWater) {
             w += soakWaterRate * dt;
         } else if (nearWaterfall) {
@@ -772,7 +841,24 @@ namespace SWE {
         w = clampf(w, 0.f, 1.f);
 
         float wetByCat[4]{};
-        ComputeWetByCategory(wd, w, wetByCat, dt);
+        ComputeWetByCategory(wd, w, wetByCat, dt, envDominates);
+
+        float forcedW = -1.0f;
+        std::uint8_t forcedMask = 0;
+        const bool hasOv = getOverride(forcedW, forcedMask);
+
+        if (hasOv) {
+            for (int ci = 0; ci < 4; ++ci) {
+                if (forcedMask & (1u << ci)) {
+                    wetByCat[ci] = forcedW;
+                }
+            }
+        }
+
+        if (!Settings::affectSkin.load()) wetByCat[0] = 0.0f;
+        if (!Settings::affectHair.load()) wetByCat[1] = 0.0f;
+        if (!Settings::affectArmor.load()) wetByCat[2] = 0.0f;
+        if (!Settings::affectWeapons.load()) wetByCat[3] = 0.0f;
 
         float wFinal = std::max(std::max(wetByCat[0], wetByCat[1]), std::max(wetByCat[2], wetByCat[3]));
         wd.wetness = wFinal;
@@ -811,11 +897,13 @@ namespace SWE {
         RE::NiAVObject* roots[2] = {third, first};
 
         const float maxWet = std::max(std::max(wetByCat[0], wetByCat[1]), std::max(wetByCat[2], wetByCat[3]));
+        /*
         if (maxWet > 0.0005f) {
             const bool anyToggle = Settings::affectSkin.load() || Settings::affectHair.load() ||
                                    Settings::affectArmor.load() || Settings::affectWeapons.load();
             if (!anyToggle) return;
         }
+        */
 
         const float defMaxGloss = Settings::maxGlossiness.load();
         const float defMaxSpec = Settings::maxSpecularStrength.load();
@@ -840,10 +928,10 @@ namespace SWE {
                                     (cat == MatCat::Weapon && !Settings::affectWeapons.load());
 
             const int ci = CatIndex(cat);
-            const float wet = std::clamp(wetByCat[ci], 0.0f, 1.0f);
+            float wet = std::clamp(wetByCat[ci], 0.0f, 1.0f);
 
-            if (toggledOff && wet > 0.0005f) {
-                return;
+            if (toggledOff) {
+                wet = 0.0f;
             }
 
             const auto& ov = wd.activeOv[ci];
@@ -878,6 +966,11 @@ namespace SWE {
             const MatSnapshot& base = it->second;
 
             auto* sp = static_cast<RE::BSShaderProperty*>(lsp);
+
+            const bool isArmorOrWeap = (cat == MatCat::ArmorClothing || cat == MatCat::Weapon);
+            const bool likelyPBR = MaterialLooksPBR(mat);
+            const bool pbrMode = Settings::pbrFriendlyMode.load() && (isArmorOrWeap || likelyPBR);
+
             if (wet <= 0.0005f) {
                 if (sp) {
                     SetSpecularEnabled(sp, base.hadSpecular);
@@ -896,17 +989,38 @@ namespace SWE {
             }
 
             if (sp) {
-                SetSpecularEnabled(sp, true);
+                if (pbrMode && isArmorOrWeap) {
+                    SetSpecularEnabled(sp, base.hadSpecular);
+                    if (!base.hadSpecular) {
+                        // Force spec on if going PBR on non-spec base
+                    }
+                } else {
+                    SetSpecularEnabled(sp, true);
+                }
             }
+
             RE::NiColor newSpec{base.baseSpecR, base.baseSpecG, base.baseSpecB};
             if ((newSpec.red + newSpec.green + newSpec.blue) < 0.05f) {
-                newSpec = {0.7f, 0.7f, 0.7f};
+                if (!(pbrMode && isArmorOrWeap)) {
+                    newSpec = {0.7f, 0.7f, 0.7f};
+                }
             }
             float newGloss = base.baseSpecularPower + wet * effGlBoost * catMul;
             newGloss = std::clamp(newGloss, effMinGloss, effMaxGloss);
 
             float newScale = base.baseSpecularScale + wet * effScBoost * catMul;
             newScale = std::clamp(newScale, effMinSpec, effMaxSpec);
+
+            if (pbrMode && isArmorOrWeap) {
+                const float amul = std::clamp(Settings::pbrArmorWeapMul.load(), 0.0f, 1.0f);
+                const float pbrG = Settings::pbrMaxGlossArmor.load();
+                const float pbrS = Settings::pbrMaxSpecArmor.load();
+
+                newGloss = base.baseSpecularPower + (newGloss - base.baseSpecularPower) * amul;
+                newScale = base.baseSpecularScale + (newScale - base.baseSpecularScale) * amul;
+                newGloss = std::min(newGloss, pbrG);
+                newScale = std::min(newScale, pbrS);
+            }
 
             mat->specularPower = newGloss;
             mat->specularColor = newSpec;
@@ -960,7 +1074,7 @@ namespace SWE {
         return found;
     }
 
-    void WetController::ComputeWetByCategory(WetData& wd, float baseWet, float outWetByCat[4], float dt) {
+    void WetController::ComputeWetByCategory(WetData& wd, float baseWet, float outWetByCat[4], float dt, bool envDominates) {
         std::scoped_lock l(_mtx);
 
         for (auto it = wd.extSources.begin(); it != wd.extSources.end();) {
@@ -972,6 +1086,14 @@ namespace SWE {
                 }
             }
             ++it;
+        }
+
+        if (envDominates) {
+            for (int i = 0; i < 4; ++i) {
+                wd.activeOv[i] = {};
+                outWetByCat[i] = baseWet;
+            }
+            return;
         }
 
         for (int i = 0; i < 4; ++i) {
@@ -1169,10 +1291,9 @@ namespace SWE {
         auto& wd = _wet[a->GetFormID()];
         auto& src = wd.extSources[key];
         src.value = value;
-        if (durationSec > 0.f) {
-            src.expiryRemainingSec = durationSec;
-        } else {
-            src.expiryRemainingSec = -1.f;
+        src.expiryRemainingSec = (durationSec > 0.f) ? durationSec : -1.f;
+        if (src.catMask == 0) {
+            src.catMask = SWE::Papyrus::SWE_CAT_SKIN_FACE;
         }
     }
 
