@@ -32,6 +32,7 @@ set(HEADERS
     include/nlohmann/json_fwd.hpp
     include/IPluginInterface.h
     include/PapyrusAPI.h
+    include/utils/Utils.h
 )
 
 # Add source files from the src directory
@@ -41,6 +42,7 @@ set(SOURCES
     src/Settings.cpp
     src/UI.cpp
     src/PapyrusAPI.cpp
+    src/utils/Utils.cpp
     ${CMAKE_CURRENT_BINARY_DIR}/version.rc
 )
 

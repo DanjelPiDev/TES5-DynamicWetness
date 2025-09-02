@@ -4,6 +4,8 @@
 #include <functional>
 
 #include "Settings.h"
+#include "PapyrusAPI.h"
+
 #include "REL/Relocation.h"
 
 #include "RE/B/BSLightingShaderMaterialBase.h"
@@ -30,7 +32,21 @@ namespace SWE {
     enum class MatCat { SkinFace, Hair, ArmorClothing, Weapon, Other };
 
     static inline float clampf(float v, float lo, float hi) { return (v < lo) ? lo : (v > hi) ? hi : v; }
-    
+
+    static inline int CatIndex(MatCat c) {
+        switch (c) {
+            case MatCat::SkinFace:
+                return 0;
+            case MatCat::Hair:
+                return 1;
+            case MatCat::ArmorClothing:
+                return 2;
+            case MatCat::Weapon:
+                return 3;
+            default:
+                return 2;
+        }
+    }
     static inline void SetSpecularEnabled(RE::BSShaderProperty* sp, bool on) {
         if (!sp) return;
         if (on)
@@ -110,7 +126,6 @@ namespace SWE {
         };
 
         if (auto* base = r->GetBaseObject()) {
-
 #if defined(CLASSIC_CLIB_HAS_EDITORID) || defined(SKYRIM_AE) || defined(SKYRIM_SE)
             if (const char* ed = base->GetFormEditorID(); ed && *ed) {
                 std::string e = lc(ed);
@@ -127,8 +142,7 @@ namespace SWE {
                                        (m.find("fx\\waterfall") != std::string::npos) ||
                                        (m.find("fx/waterfall") != std::string::npos);
                     const bool isAux = (m.find("splash") != std::string::npos) ||
-                                       (m.find("ripple") != std::string::npos) ||
-                                       (m.find("foam") != std::string::npos);
+                                       (m.find("ripple") != std::string::npos) || (m.find("foam") != std::string::npos);
                     if (!hasWF && isAux) return false;
                     if (hasWF) return true;
                 }
@@ -384,8 +398,7 @@ namespace SWE {
     }
     static constexpr RE::COL_LAYER kRoofLayersPrimary[] = {
         RE::COL_LAYER::kStatic,        RE::COL_LAYER::kAnimStatic,  RE::COL_LAYER::kTransparentWall,
-        RE::COL_LAYER::kInvisibleWall, RE::COL_LAYER::kTransparent,
-        RE::COL_LAYER::kLOS,
+        RE::COL_LAYER::kInvisibleWall, RE::COL_LAYER::kTransparent, RE::COL_LAYER::kLOS,
     };
 
     static constexpr RE::COL_LAYER kRoofLayersFallback[] = {
@@ -445,7 +458,7 @@ namespace SWE {
                 return "Other";
         }
     }
-    
+
     static inline RE::hkVector4 ToHK(const RE::NiPoint3& p) {
         const float s = RE::bhkWorld::GetWorldScale();
         return RE::hkVector4{p.x * s, p.y * s, p.z * s, 0.0f};
@@ -505,10 +518,7 @@ namespace SWE {
         return true;
     }
 
-    
-    void WetController::Install() {
-        _lastTick = std::chrono::steady_clock::now();
-    }
+    void WetController::Install() { _lastTick = std::chrono::steady_clock::now(); }
 
     void WetController::Start() {
         if (_running.exchange(true)) return;
@@ -630,7 +640,8 @@ namespace SWE {
                             auto it = _wet.find(a->GetFormID());
                             if (it != _wet.end() &&
                                 (it->second.lastAppliedWet > 0.0005f || it->second.wetness > 0.0005f)) {
-                                ApplyWetnessMaterials(a, 0.0f);
+                                const float zeros[4]{0, 0, 0, 0};
+                                ApplyWetnessMaterials(a, zeros);
                                 it->second.wetness = 0.0f;
                                 it->second.lastAppliedWet = 0.0f;
                             }
@@ -730,7 +741,7 @@ namespace SWE {
                         const bool inside = IsInsideWaterfallFX(
                             a, &ref, std::max(0.f, Settings::waterfallWidthPad.load()),
                             std::max(0.f, Settings::waterfallDepthPad.load()),
-                            std::max(0.f, Settings::waterfallZPad.load()), requireBelowTop /* vorher true */);
+                            std::max(0.f, Settings::waterfallZPad.load()), requireBelowTop);
 
                         if (inside) {
                             found = true;
@@ -738,7 +749,6 @@ namespace SWE {
                         }
                         return RE::BSContainer::ForEachResult::kContinue;
                     });
-
                 }
                 wd.cachedInsideWaterfall = found;
                 wd.lastWaterfallProbe = now;
@@ -760,22 +770,36 @@ namespace SWE {
         }
 
         w = clampf(w, 0.f, 1.f);
-        w = ApplyExternalSources(a, wd, w);
 
-        wd.wetness = w;
+        float wetByCat[4]{};
+        ComputeWetByCategory(wd, w, wetByCat, dt);
 
-        if (w <= 0.0005f) {
-            if (wd.lastAppliedWet > 0.0005f) {
-                ApplyWetnessMaterials(a, 0.0f);
-                wd.lastAppliedWet = 0.0f;
+        float wFinal = std::max(std::max(wetByCat[0], wetByCat[1]), std::max(wetByCat[2], wetByCat[3]));
+        wd.wetness = wFinal;
+
+        const float prevMax = std::max(std::max(wd.lastAppliedCat[0], wd.lastAppliedCat[1]),
+                                       std::max(wd.lastAppliedCat[2], wd.lastAppliedCat[3]));
+        if (wFinal <= 0.0005f) {
+            if (prevMax > 0.0005f) {
+                const float zeros[4]{0, 0, 0, 0};
+                ApplyWetnessMaterials(a, zeros);
+                wd.lastAppliedCat[0] = wd.lastAppliedCat[1] = wd.lastAppliedCat[2] = wd.lastAppliedCat[3] = 0.f;
             }
-        } else if (std::abs(wd.lastAppliedWet - w) > 0.0025f) {
-            ApplyWetnessMaterials(a, w);
-            wd.lastAppliedWet = w;
+        } else {
+            bool anyChange = false;
+            for (int i = 0; i < 4; ++i)
+                if (std::abs(wd.lastAppliedCat[i] - wetByCat[i]) > 0.0025f) {
+                    anyChange = true;
+                    break;
+                }
+            if (anyChange) {
+                ApplyWetnessMaterials(a, wetByCat);
+                for (int i = 0; i < 4; ++i) wd.lastAppliedCat[i] = wetByCat[i];
+            }
         }
     }
 
-    void SWE::WetController::ApplyWetnessMaterials(RE::Actor* a, float wet) {
+    void SWE::WetController::ApplyWetnessMaterials(RE::Actor* a, const float wetByCat[4]) {
         if (!a) return;
 
         RE::NiAVObject* third = a->Get3D();
@@ -786,20 +810,22 @@ namespace SWE {
         }
         RE::NiAVObject* roots[2] = {third, first};
 
-        if (wet > 0.0005f) {
+        const float maxWet = std::max(std::max(wetByCat[0], wetByCat[1]), std::max(wetByCat[2], wetByCat[3]));
+        if (maxWet > 0.0005f) {
             const bool anyToggle = Settings::affectSkin.load() || Settings::affectHair.load() ||
                                    Settings::affectArmor.load() || Settings::affectWeapons.load();
             if (!anyToggle) return;
         }
 
-        const float maxGloss = Settings::maxGlossiness.load();
-        const float maxSpec = Settings::maxSpecularStrength.load();
-        const float minGloss = std::min(Settings::minGlossiness.load(), maxGloss);
-        const float minSpec = std::min(Settings::minSpecularStrength.load(), maxSpec);
-        const float glBoost = std::min(60.0f, Settings::glossinessBoost.load());
-        const float scBoost = Settings::specularScaleBoost.load();
+        const float defMaxGloss = Settings::maxGlossiness.load();
+        const float defMaxSpec = Settings::maxSpecularStrength.load();
+        const float defMinGloss = std::min(Settings::minGlossiness.load(), defMaxGloss);
+        const float defMinSpec = std::min(Settings::minSpecularStrength.load(), defMaxSpec);
+        const float defGlBoost = std::min(60.0f, Settings::glossinessBoost.load());
+        const float defScBoost = Settings::specularScaleBoost.load();
+        const float defSkinHair = std::max(0.1f, Settings::skinHairResponseMul.load());
 
-        wet = std::clamp(wet, 0.0f, 1.0f);
+        auto& wd = _wet[a->GetFormID()];
 
         int geomsTouched = 0, propsTouched = 0;
 
@@ -813,12 +839,22 @@ namespace SWE {
                                     (cat == MatCat::ArmorClothing && !Settings::affectArmor.load()) ||
                                     (cat == MatCat::Weapon && !Settings::affectWeapons.load());
 
+            const int ci = CatIndex(cat);
+            const float wet = std::clamp(wetByCat[ci], 0.0f, 1.0f);
+
             if (toggledOff && wet > 0.0005f) {
                 return;
             }
 
+            const auto& ov = wd.activeOv[ci];
+            const float effMaxGloss = (ov.maxGloss >= 0.f) ? std::min(defMaxGloss, ov.maxGloss) : defMaxGloss;
+            const float effMaxSpec = (ov.maxSpec >= 0.f) ? std::min(defMaxSpec, ov.maxSpec) : defMaxSpec;
+            const float effMinGloss = (ov.minGloss >= 0.f) ? std::max(defMinGloss, ov.minGloss) : defMinGloss;
+            const float effMinSpec = (ov.minSpec >= 0.f) ? std::max(defMinSpec, ov.minSpec) : defMinSpec;
+            const float effGlBoost = (ov.glossBoost >= 0.f) ? std::min(60.0f, ov.glossBoost) : defGlBoost;
+            const float effScBoost = (ov.specBoost >= 0.f) ? ov.specBoost : defScBoost;
             const float catMul = (cat == MatCat::SkinFace || cat == MatCat::Hair)
-                                     ? std::max(0.1f, Settings::skinHairResponseMul.load())
+                                     ? ((ov.skinHairMul >= 0.f) ? std::max(0.1f, ov.skinHairMul) : defSkinHair)
                                      : 1.0f;
 
             auto* mat = static_cast<RE::BSLightingShaderMaterialBase*>(lsp->material);
@@ -866,11 +902,11 @@ namespace SWE {
             if ((newSpec.red + newSpec.green + newSpec.blue) < 0.05f) {
                 newSpec = {0.7f, 0.7f, 0.7f};
             }
-            float newGloss = base.baseSpecularPower + wet * glBoost * catMul;
-            newGloss = std::clamp(newGloss, minGloss, maxGloss);
+            float newGloss = base.baseSpecularPower + wet * effGlBoost * catMul;
+            newGloss = std::clamp(newGloss, effMinGloss, effMaxGloss);
 
-            float newScale = base.baseSpecularScale + wet * scBoost * catMul;
-            newScale = std::clamp(newScale, minSpec, maxSpec);
+            float newScale = base.baseSpecularScale + wet * effScBoost * catMul;
+            newScale = std::clamp(newScale, effMinSpec, effMaxSpec);
 
             mat->specularPower = newGloss;
             mat->specularColor = newSpec;
@@ -923,6 +959,100 @@ namespace SWE {
 
         return found;
     }
+
+    void WetController::ComputeWetByCategory(WetData& wd, float baseWet, float outWetByCat[4], float dt) {
+        std::scoped_lock l(_mtx);
+
+        for (auto it = wd.extSources.begin(); it != wd.extSources.end();) {
+            if (it->second.expiryRemainingSec >= 0.f) {
+                it->second.expiryRemainingSec -= std::max(0.f, dt);
+                if (it->second.expiryRemainingSec <= 0.f) {
+                    it = wd.extSources.erase(it);
+                    continue;
+                }
+            }
+            ++it;
+        }
+
+        for (int i = 0; i < 4; ++i) {
+            wd.activeOv[i] = {};
+            outWetByCat[i] = baseWet;
+        }
+        if (wd.extSources.empty()) return;
+
+        float passthrough[4] = {0.f, 0.f, 0.f, 0.f};
+        bool zeroBase[4] = {false, false, false, false};
+
+        auto mergeOv = [&](WetData::CatOverrides& ov, const OverrideParams& sOv) {
+            ov.any = true;
+            if (sOv.maxGloss >= 0.f)
+                ov.maxGloss = (ov.maxGloss < 0.f) ? sOv.maxGloss : std::min(ov.maxGloss, sOv.maxGloss);
+            if (sOv.maxSpec >= 0.f) ov.maxSpec = (ov.maxSpec < 0.f) ? sOv.maxSpec : std::min(ov.maxSpec, sOv.maxSpec);
+            if (sOv.minGloss >= 0.f)
+                ov.minGloss = (ov.minGloss < 0.f) ? sOv.minGloss : std::max(ov.minGloss, sOv.minGloss);
+            if (sOv.minSpec >= 0.f) ov.minSpec = (ov.minSpec < 0.f) ? sOv.minSpec : std::max(ov.minSpec, sOv.minSpec);
+            if (sOv.glossBoost >= 0.f) ov.glossBoost = std::max(ov.glossBoost, sOv.glossBoost);
+            if (sOv.specBoost >= 0.f) ov.specBoost = std::max(ov.specBoost, sOv.specBoost);
+            if (sOv.skinHairMul >= 0.f) ov.skinHairMul = std::max(ov.skinHairMul, sOv.skinHairMul);
+        };
+
+        for (auto& [k, s] : wd.extSources) {
+            if (s.expiryRemainingSec == 0.f) continue;
+
+            const bool isPT = (s.flags & SWE::Papyrus::SWE_FLAG_PASSTHROUGH) != 0;
+            const bool zBase = (s.flags & SWE::Papyrus::SWE_FLAG_ZERO_BASE) != 0;
+
+            for (int ci = 0; ci < 4; ++ci) {
+                if ((s.catMask & (1u << ci)) == 0) continue;
+
+                mergeOv(wd.activeOv[ci], s.ov);
+
+                if (isPT) passthrough[ci] += s.value;
+                if (zBase) zeroBase[ci] = true;
+            }
+        }
+
+        float baseByCat[4] = {baseWet, baseWet, baseWet, baseWet};
+        for (int ci = 0; ci < 4; ++ci)
+            if (zeroBase[ci]) baseByCat[ci] = 0.f;
+
+        auto blendOne = [&](int ci) -> float {
+            float sum = 0.f, mx = 0.f;
+            bool any = false;
+
+            for (auto& [k, s] : wd.extSources) {
+                if (s.expiryRemainingSec == 0.f) continue;
+                if ((s.flags & SWE::Papyrus::SWE_FLAG_PASSTHROUGH) != 0) continue;
+                if ((s.catMask & (1u << ci)) == 0) continue;
+
+                any = true;
+                sum += s.value;
+                mx = std::max(mx, s.value);
+            }
+
+            if (!any) return baseByCat[ci];
+
+            switch (Settings::externalBlendMode.load()) {
+                default:
+                case 0:
+                    return std::max(baseByCat[ci], mx);
+                case 1:
+                    return clampf(baseByCat[ci] + sum, 0.f, 1.f);
+                case 2: {
+                    float rest = std::max(0.f, sum - mx);
+                    float w = clampf(Settings::externalAddWeight.load(), 0.f, 1.f);
+                    return clampf(std::max(baseByCat[ci], mx) + rest * w, 0.f, 1.f);
+                }
+            }
+        };
+
+        for (int ci = 0; ci < 4; ++ci) {
+            float mixed = blendOne(ci);
+            outWetByCat[ci] = clampf(mixed + passthrough[ci], 0.f, 1.f);
+        }
+    }
+
+
 
     bool WetController::IsInsideWaterfallFX(const RE::Actor* a, const RE::TESObjectREFR* wfRef, float padX, float padY,
                                             float padZ, bool requireBelowTop) const {
@@ -1026,6 +1156,10 @@ namespace SWE {
         return cal ? cal->GetDaysPassed() * 24.0f : 0.0f;
     }
 
+    float SWE::WetController::GetSubmergedLevel(RE::Actor* a) const { return ComputeSubmergeLevel(a); }
+    bool SWE::WetController::IsActorWetByWater(RE::Actor* a) const { return SWE::IsActorWetByWater(a); }
+    bool SWE::WetController::IsWetWeatherAround(RE::Actor* a) const { return IsRainingOrSnowing(); }
+
     void WetController::SetExternalWetness(RE::Actor* a, std::string key, float value, float durationSec) {
         if (!a) return;
         key = NormalizeKey(std::move(key));
@@ -1036,10 +1170,36 @@ namespace SWE {
         auto& src = wd.extSources[key];
         src.value = value;
         if (durationSec > 0.f) {
-            src.expiryGameHours = GetGameHours() + (durationSec / 3600.f);
+            src.expiryRemainingSec = durationSec;
         } else {
-            src.expiryGameHours = -1.f;
+            src.expiryRemainingSec = -1.f;
         }
+    }
+
+    void WetController::SetExternalWetnessMask(RE::Actor* a, const std::string& key, float intensity01,
+                                               float durationSec, std::uint8_t catMask, std::uint32_t flags) {
+        if (!a) return;
+        if ((catMask & SWE::Papyrus::SWE_CAT_MASK_4BIT) == 0) return;
+
+        std::string normKey = NormalizeKey(key);
+        if (normKey.empty()) return;
+
+        std::scoped_lock l(_mtx);
+        auto& wd = _wet[a->GetFormID()];
+
+        ExternalSource& src = wd.extSources[normKey];
+        src.value = clampf(intensity01, 0.f, 1.f);
+        src.expiryRemainingSec = (durationSec > 0.f) ? durationSec : -1.f;
+        src.catMask = static_cast<std::uint8_t>(catMask & SWE::Papyrus::SWE_CAT_MASK_4BIT);
+        src.flags = flags;
+    }
+    
+    void WetController::SetExternalWetnessEx(RE::Actor* a, std::string key, float value, float durationSec,
+                                             std::uint8_t catMask, const OverrideParams& ov) {
+        SetExternalWetnessMask(a, key, value, durationSec, catMask);
+        std::scoped_lock l(_mtx);
+        auto& src = _wet[a->GetFormID()].extSources[NormalizeKey(key)];
+        src.ov = ov;
     }
 
     void WetController::ClearExternalWetness(RE::Actor* a, std::string key) {
@@ -1070,40 +1230,6 @@ namespace SWE {
         return (it != _wet.end()) ? it->second.wetness : 0.f;
     }
 
-    float WetController::ApplyExternalSources(RE::Actor* a, WetData& wd, float baseWet) {
-        std::scoped_lock l(_mtx);
-        const float nowH = GetGameHours();
-
-        for (auto it = wd.extSources.begin(); it != wd.extSources.end();) {
-            if (it->second.expiryGameHours >= 0.f && nowH >= it->second.expiryGameHours)
-                it = wd.extSources.erase(it);
-            else
-                ++it;
-        }
-
-        if (wd.extSources.empty()) return baseWet;
-
-        float sum = 0.f, mx = 0.f;
-        for (auto& [k, s] : wd.extSources) {
-            sum += s.value;
-            mx = std::max(mx, s.value);
-        }
-
-        switch (Settings::externalBlendMode.load()) {
-            default:
-            case 0:
-                return std::max(baseWet, mx);
-            case 1:
-                return clampf(baseWet + sum, 0.f, 1.f);
-            case 2: {
-                float rest = std::max(0.f, sum - mx);
-                float w = clampf(Settings::externalAddWeight.load(), 0.f, 1.f);
-                return clampf(std::max(baseWet, mx) + rest * w, 0.f, 1.f);
-            }
-        }
-    }
-
-
     /*
     * =================================
     * Serialization and Deserialization
@@ -1112,7 +1238,6 @@ namespace SWE {
     void WetController::Serialize(SKSE::SerializationInterface* intfc) {
         std::scoped_lock l(_mtx);
 
-        // Header: Magic + Anzahl
         const std::uint32_t magic = 'SWET';
         intfc->WriteRecordData(&magic, sizeof(magic));
 
@@ -1142,7 +1267,21 @@ namespace SWE {
                 if (klen) intfc->WriteRecordData(k.data(), klen);
 
                 intfc->WriteRecordData(&src.value, sizeof(src.value));
-                intfc->WriteRecordData(&src.expiryGameHours, sizeof(src.expiryGameHours));
+                float remainSec = src.expiryRemainingSec;
+                intfc->WriteRecordData(&remainSec, sizeof(remainSec));
+
+                intfc->WriteRecordData(&src.catMask, sizeof(src.catMask));
+
+                std::uint32_t flags = src.flags;
+                intfc->WriteRecordData(&flags, sizeof(flags));
+
+                intfc->WriteRecordData(&src.ov.maxGloss, sizeof(float));
+                intfc->WriteRecordData(&src.ov.maxSpec, sizeof(float));
+                intfc->WriteRecordData(&src.ov.minGloss, sizeof(float));
+                intfc->WriteRecordData(&src.ov.minSpec, sizeof(float));
+                intfc->WriteRecordData(&src.ov.glossBoost, sizeof(float));
+                intfc->WriteRecordData(&src.ov.specBoost, sizeof(float));
+                intfc->WriteRecordData(&src.ov.skinHairMul, sizeof(float));
             }
         }
     }
@@ -1187,8 +1326,21 @@ namespace SWE {
                         std::string dump(klen, '\0');
                         if (!read(dump.data(), klen)) break;
                     }
-                    float v, exp;
-                    if (!read(&v, sizeof(v)) || !read(&exp, sizeof(exp))) break;
+                    float v, expLike;
+                    if (!read(&v, sizeof(v)) || !read(&expLike, sizeof(expLike))) break;
+
+                    if (version >= 3) {
+                        std::uint8_t mask;
+                        float ftmp;
+                        if (!read(&mask, sizeof(mask))) break;
+                        if (!read(&ftmp, sizeof(float))) break;
+                        if (!read(&ftmp, sizeof(float))) break;
+                        if (!read(&ftmp, sizeof(float))) break;
+                        if (!read(&ftmp, sizeof(float))) break;
+                        if (!read(&ftmp, sizeof(float))) break;
+                        if (!read(&ftmp, sizeof(float))) break;
+                        if (!read(&ftmp, sizeof(float))) break;
+                    }
                 }
                 continue;
             }
@@ -1209,9 +1361,6 @@ namespace SWE {
                     key.resize(klen);
                     if (!read(key.data(), klen)) break;
                 }
-                float v = 0.f, expH = -1.f;
-                if (!read(&v, sizeof(v)) || !read(&expH, sizeof(expH))) break;
-
                 std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c) { return std::tolower(c); });
                 key.erase(key.begin(),
                           std::find_if(key.begin(), key.end(), [](unsigned char c) { return !std::isspace(c); }));
@@ -1219,11 +1368,70 @@ namespace SWE {
                     std::find_if(key.rbegin(), key.rend(), [](unsigned char c) { return !std::isspace(c); }).base(),
                     key.end());
 
-                wd.extSources[key] = ExternalSource{.value = clampf(v, 0.f, 1.f), .expiryGameHours = expH};
+                float v = 0.f;
+                if (!read(&v, sizeof(v))) break;
+
+                ExternalSource src{};
+                src.value = clampf(v, 0.f, 1.f);
+
+                float expLike = -1.f;
+                if (!read(&expLike, sizeof(expLike))) break;
+
+                std::uint8_t mask = 0x0F;
+                if (!read(&mask, sizeof(mask))) break;
+                src.catMask = (mask & 0x0F) ? (mask & 0x0F) : 0x0F;
+
+                if (version >= 5) {
+                    std::uint32_t f = 0;
+                    if (!read(&f, sizeof(f))) break;
+                    src.flags = f;
+                } else {
+                    src.flags = 0;
+                }
+
+                if (version >= 4) {
+                    src.expiryRemainingSec = expLike;
+                } else {
+                    const float nowH = GetGameHours();
+                    if (expLike >= 0.f) {
+                        src.expiryRemainingSec = std::max(0.f, (expLike - nowH) * 3600.f);
+                    } else {
+                        src.expiryRemainingSec = -1.f;
+                    }
+                }
+
+                if (version >= 3) {
+                    std::uint8_t mask = 0x0F;
+                    if (!read(&mask, sizeof(mask))) break;
+                    src.catMask = (mask & 0x0F) ? (mask & 0x0F) : 0x0F;
+
+                    float ftmp;
+                    if (!read(&ftmp, sizeof(float))) break;
+                    src.ov.maxGloss = ftmp;
+                    if (!read(&ftmp, sizeof(float))) break;
+                    src.ov.maxSpec = ftmp;
+                    if (!read(&ftmp, sizeof(float))) break;
+                    src.ov.minGloss = ftmp;
+                    if (!read(&ftmp, sizeof(float))) break;
+                    src.ov.minSpec = ftmp;
+                    if (!read(&ftmp, sizeof(float))) break;
+                    src.ov.glossBoost = ftmp;
+                    if (!read(&ftmp, sizeof(float))) break;
+                    src.ov.specBoost = ftmp;
+                    if (!read(&ftmp, sizeof(float))) break;
+                    src.ov.skinHairMul = ftmp;
+                } else {
+                    src.catMask = 0x0F;
+                    src.ov = {};
+                }
+
+                wd.extSources[key] = std::move(src);
             }
 
             _wet[newFID] = std::move(wd);
         }
+
         SKSE::GetTaskInterface()->AddTask([this]() { this->RefreshNow(); });
     }
+
 }

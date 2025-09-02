@@ -33,6 +33,27 @@ namespace SWE {
         float GetExternalWetness(RE::Actor* a, std::string key);
         float GetFinalWetnessForActor(RE::Actor* a);
 
+        float GetSubmergedLevel(RE::Actor* a) const;
+        bool IsActorWetByWater(RE::Actor* a) const;
+        bool IsWetWeatherAround(RE::Actor* a) const;
+        bool IsNearHeatSource(const RE::Actor* a, float radius) const;
+        bool IsUnderRoof(RE::Actor* a) const;
+        bool IsActorInExteriorWet(RE::Actor* a) const;
+
+        struct OverrideParams {
+            float maxGloss{-1.f};
+            float maxSpec{-1.f};
+            float minGloss{-1.f};
+            float minSpec{-1.f};
+            float glossBoost{-1.f};
+            float specBoost{-1.f};
+            float skinHairMul{-1.f};
+        };
+        void SetExternalWetnessMask(RE::Actor* a, const std::string& key, float intensity01, float durationSec,
+                                    std::uint8_t catMask, std::uint32_t flags = 0);
+        void SetExternalWetnessEx(RE::Actor* a, std::string key, float value, float durationSec, std::uint8_t catMask,
+                                  const OverrideParams& ov);
+
     private:
         WetController() = default;
         ~WetController() = default;
@@ -48,7 +69,10 @@ namespace SWE {
 
         struct ExternalSource {
             float value{0.f};             // 0...1
-            float expiryGameHours{-1.f};  // -1 = never
+            float expiryRemainingSec = -1.f;
+            std::uint8_t catMask{0x0F};
+            std::uint32_t flags = 0;  // behavior flags
+            OverrideParams ov;
         };
 
         struct WetData {
@@ -62,28 +86,32 @@ namespace SWE {
             std::unordered_map<std::string, ExternalSource> extSources;
             std::chrono::steady_clock::time_point lastWaterfallProbe{};
             bool cachedInsideWaterfall{false};
+
+            struct CatOverrides {
+                bool any{false};
+                float maxGloss{-1.f}, maxSpec{-1.f}, minGloss{-1.f}, minSpec{-1.f};
+                float glossBoost{-1.f}, specBoost{-1.f}, skinHairMul{-1.f};
+            };
+            CatOverrides activeOv[4]{};  // 0=Skin, 1=Hair, 2=Armor, 3=Weapon
+            float lastAppliedCat[4]{-1.f, -1.f, -1.f, -1.f};
         };
 
-        // Keyed by FormID to keep it simple and robust across handles
         std::unordered_map<uint32_t, WetData> _wet;
 
         std::chrono::steady_clock::time_point _lastTick = std::chrono::steady_clock::now();
 
         void UpdateActorWetness(RE::Actor* a, float dt);
-        void ApplyWetnessMaterials(RE::Actor* a, float wet);
+        void ApplyWetnessMaterials(RE::Actor* a, const float wetByCat[4]);
 
-        bool IsActorInExteriorWet(RE::Actor* a) const;
         bool IsRainingOrSnowing() const;
         bool IsSnowingCurrent() const;
         bool IsInsideWaterfallFX(const RE::Actor* a, const RE::TESObjectREFR* wfRef, float padX, float padY, float padZ,
                                  bool requireBelowTop) const;
 
-        bool IsNearHeatSource(const RE::Actor* a, float radius) const;
         bool RayHitsCover(const RE::NiPoint3& from, const RE::NiPoint3& to,
                           const RE::TESObjectREFR* ignoreRef = nullptr) const;
-        bool IsUnderRoof(RE::Actor* a) const;
 
-        float ApplyExternalSources(RE::Actor* a, WetData& wd, float baseWet);
+        void ComputeWetByCategory(WetData& wd, float baseWet, float outWetByCat[4], float dt);
         float GetGameHours() const;
 
         mutable std::recursive_mutex _mtx;
