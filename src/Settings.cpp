@@ -66,11 +66,11 @@ namespace Settings {
 
     std::vector<FormSpec> SnapshotTrackedActors() {
         std::shared_lock lk(actorsMutex);
-        return trackedActors;  // copy
+        return trackedActors;
     }
     std::vector<FormSpec> SnapshotActorOverrides() {
         std::shared_lock lk(actorsMutex);
-        return actorOverrides;  // copy
+        return actorOverrides;
     }
 
     static std::uint32_t parse_form_id(const nlohmann::json& jv) {
@@ -108,6 +108,7 @@ namespace Settings {
                         if (res.ec == std::errc()) fs.mask = static_cast<std::uint8_t>(mv & 0x0F);
                     }
                 }
+                if (e.contains("auto")) fs.autoWet = e.at("auto").get<bool>();
                 if (fs.id != 0) out.push_back(std::move(fs));
             } catch (...) {
             }
@@ -127,6 +128,7 @@ namespace Settings {
                 {"value", std::clamp(fs.value, 0.0f, 1.0f)},
                 {"enabled", fs.enabled},
                 {"mask", std::string(maskbuf)},
+                {"auto", fs.autoWet}
             });
         }
         return arr;

@@ -670,6 +670,7 @@ namespace SWE {
         std::unordered_set<std::uint32_t> allow;
         const bool optIn = Settings::npcOptInOnly.load();
         std::unordered_set<std::uint32_t> allowIDs;
+
         if (optIn) {
             for (const auto& fs : trackedSnap)
                 if (fs.enabled && fs.id) allowIDs.insert(fs.id);
@@ -685,7 +686,7 @@ namespace SWE {
         };
 
         RE::Actor* player = RE::PlayerCharacter::GetSingleton();
-        if (player) UpdateActorWetness(player, dt, overridesSnap);
+        if (player) UpdateActorWetness(player, dt, overridesSnap, true);
 
         if (Settings::affectNPCs.load()) {
             if (auto* proc = RE::ProcessLists::GetSingleton()) {
@@ -693,10 +694,21 @@ namespace SWE {
                 std::unordered_set<std::uint32_t> allow;
                 const bool optIn = Settings::npcOptInOnly.load();
                 if (optIn) {
-                    for (const auto& fs : trackedSnap) {
-                        if (fs.enabled && fs.id != 0) allow.insert(fs.id);
-                    }
+                    for (const auto& fs : trackedSnap)
+                        if (fs.enabled && fs.id) allowIDs.insert(fs.id);
+                    for (const auto& fs : overridesSnap)
+                        if (fs.enabled && fs.id) allowIDs.insert(fs.id);
                 }
+
+                auto resolveAutoWet = [&](RE::Actor* a) -> bool {
+                    const std::uint32_t refID = a->GetFormID();
+                    const std::uint32_t baseID = (a->GetActorBase() ? a->GetActorBase()->GetFormID() : 0);
+                    for (const auto& fs : trackedSnap) {
+                        if (!fs.id) continue;
+                        if ((fs.id == refID) || (fs.id == baseID)) return fs.autoWet;
+                    }
+                    return true;  // default Automatic
+                };
 
                 const int radius = Settings::npcRadius.load();
                 const bool useRad = (radius > 0);
@@ -704,48 +716,60 @@ namespace SWE {
                 const RE::NiPoint3 pcPos = player ? player->GetPosition() : RE::NiPoint3();
 
                 for (RE::ActorHandle& h : proc->highActorHandles) {
-                    RE::NiPointer<RE::Actor> ap = h.get();
-                    RE::Actor* a = ap.get();
+                    RE::Actor* a = h.get().get();
                     if (!a || a == player) continue;
 
-                    if (useRad) {
+                    const std::uint32_t refID = a->GetFormID();
+                    const std::uint32_t baseID = (a->GetActorBase() ? a->GetActorBase()->GetFormID() : 0);
+                    const bool selected = !optIn || allowIDs.count(refID) || allowIDs.count(baseID);
+
+                    if (useRad && player) {
                         const float d2 = a->GetPosition().GetSquaredDistance(pcPos);
                         if (d2 > radiusSq) {
-                            auto it = _wet.find(a->GetFormID());
+                            auto it = _wet.find(refID);
                             if (it != _wet.end() &&
                                 (it->second.lastAppliedWet > 0.0005f || it->second.wetness > 0.0005f)) {
                                 const float zeros[4]{0, 0, 0, 0};
                                 ApplyWetnessMaterials(a, zeros);
                                 it->second.wetness = 0.0f;
                                 it->second.lastAppliedWet = 0.0f;
+                                it->second.lastAppliedCat[0] = it->second.lastAppliedCat[1] =
+                                    it->second.lastAppliedCat[2] = it->second.lastAppliedCat[3] = 0.0f;
+                                it->second.extSources.clear();
                             }
                             continue;
                         }
                     }
 
-                    const bool allowEnvWet = isAllowed(a);
-                    if (!allowEnvWet) {
-                        if (auto it = _wet.find(a->GetFormID());
-                            it != _wet.end() && (it->second.lastAppliedWet > 0.0005f || it->second.wetness > 0.0005f)) {
+                    if (!selected) {
+                        auto it = _wet.find(refID);
+                        if (it != _wet.end() && (it->second.lastAppliedWet > 0.0005f || it->second.wetness > 0.0005f)) {
                             const float zeros[4]{0, 0, 0, 0};
                             ApplyWetnessMaterials(a, zeros);
                             it->second.wetness = 0.0f;
                             it->second.lastAppliedWet = 0.0f;
+                            it->second.lastAppliedCat[0] = it->second.lastAppliedCat[1] = it->second.lastAppliedCat[2] =
+                                it->second.lastAppliedCat[3] = 0.0f;
+                            it->second.extSources.clear();
                         }
                         continue;
                     }
 
-                    
-                    UpdateActorWetness(a, dt, overridesSnap, true);
+                    const bool autoWet = resolveAutoWet(a);
+                    const bool manualMode = !autoWet;
+                    const bool allowEnvWet = autoWet;
+
+                    UpdateActorWetness(a, dt, overridesSnap, allowEnvWet, manualMode);
                 }
             }
         }
     }
 
-    void WetController::UpdateActorWetness(RE::Actor* a, float dt, const std::vector<Settings::FormSpec>& overrides, bool allowEnvWet) {
+    void WetController::UpdateActorWetness(RE::Actor* a, float dt, const std::vector<Settings::FormSpec>& overrides, bool allowEnvWet, bool manualMode) {
         if (!a) return;
 
         auto getOverride = [&](float& outW, std::uint8_t& outMask) -> bool {
+            if (!manualMode) return false;
             const std::uint32_t refID = a->GetFormID();
             const std::uint32_t baseID = (a->GetActorBase() ? a->GetActorBase()->GetFormID() : 0);
             for (const auto& fs : overrides) {

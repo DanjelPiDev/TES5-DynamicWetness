@@ -11,6 +11,7 @@ namespace Settings {
         float value{0.f};
         bool enabled{true};
         std::uint8_t mask{0x0F};
+        bool autoWet{true};
     };
 
     extern std::atomic<bool> modEnabled;

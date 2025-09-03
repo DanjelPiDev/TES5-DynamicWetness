@@ -461,6 +461,8 @@ void __stdcall UI::WetConfig::RenderNPCs() {
                     v.end());
         };
 
+
+
         if (ImGui::TreeNodeEx("Add NPCs", ImGuiTreeNodeFlags_DefaultOpen)) {
             // Nearby picker
             if (ImGui::Button("Add nearby NPCs…")) ImGui::OpenPopup("swe_add_npc_nearby_unified");
@@ -588,8 +590,9 @@ void __stdcall UI::WetConfig::RenderNPCs() {
         for (const auto& fs : overridesSnap)
             if (std::find(ids.begin(), ids.end(), fs.id) == ids.end()) ids.push_back(fs.id);
 
-        if (ImGui::BeginTable("npc_mgr_tbl", 5, ImGuiTableFlags_Resizable | ImGuiTableFlags_Borders)) {
+        if (ImGui::BeginTable("npc_mgr_tbl", 6, ImGuiTableFlags_Resizable | ImGuiTableFlags_Borders)) {
             ImGui::TableSetupColumn("Actor");
+            ImGui::TableSetupColumn("Mode");
             ImGui::TableSetupColumn("Wetness (0..1)");
             ImGui::TableSetupColumn("Categories");
             ImGui::TableSetupColumn("Enabled");
@@ -610,23 +613,53 @@ void __stdcall UI::WetConfig::RenderNPCs() {
                 if (auto* npc = RE::TESForm::LookupByID<RE::TESNPC>(fid)) nm = npc->GetName();
                 ImGui::TextUnformatted(nm && nm[0] ? nm : "(unknown)");
 
-                // Wetness Slider (Override-Commit)
                 ImGui::TableSetColumnIndex(1);
-                float v = ovrS ? ovrS->value : 1.0f;
-                if (ImGui::SliderFloat("##w", &v, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp)) {
-                    {
-                        std::unique_lock lk(Settings::actorsMutex);
-                        auto* o = find_by_id(Settings::actorOverrides, fid);
-                        if (!o)
-                            Settings::actorOverrides.push_back({"", fid, v, true, 0x0F});
-                        else
-                            o->value = v;
+                bool autoWet = trkS ? trkS->autoWet : true;
+                int modeIdx = autoWet ? 0 : 1;
+                if (ImGui::Combo("##mode", &modeIdx, "Automatic\0Manual\0")) {
+                    autoWet = (modeIdx == 0);
+                    std::unique_lock lk(Settings::actorsMutex);
+                    // ensure tracked exists
+                    auto it = std::find_if(Settings::trackedActors.begin(), Settings::trackedActors.end(),
+                                           [&](const Settings::FormSpec& fs) { return fs.id == fid; });
+                    if (it == Settings::trackedActors.end()) {
+                        Settings::trackedActors.push_back({"", fid, 1.0f, true, 0x0F, autoWet});
+                    } else {
+                        it->autoWet = autoWet;
+                    }
+                    if (!autoWet) {
+                        auto o = std::find_if(Settings::actorOverrides.begin(), Settings::actorOverrides.end(),
+                                              [&](const Settings::FormSpec& fs) { return fs.id == fid; });
+                        if (o == Settings::actorOverrides.end())
+                            Settings::actorOverrides.push_back({"", fid, 1.0f, true, 0x0F});
                     }
                     SWE::WetController::GetSingleton()->RefreshNow();
                 }
 
-                // Category Mask
+                const bool manual = !autoWet;
+
+                // Wetness Slider (Override-Commit)
                 ImGui::TableSetColumnIndex(2);
+                float v = ovrS ? ovrS->value : 1.0f;
+                if (!manual) ImGui::BeginDisabled();
+                if (ImGui::SliderFloat("##w", &v, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp)) {
+                    std::unique_lock lk(Settings::actorsMutex);
+                    auto* o = [&]() {
+                        auto it = std::find_if(Settings::actorOverrides.begin(), Settings::actorOverrides.end(),
+                                               [&](const Settings::FormSpec& fs) { return fs.id == fid; });
+                        if (it == Settings::actorOverrides.end()) {
+                            Settings::actorOverrides.push_back({"", fid, v, true, 0x0F});
+                            return &Settings::actorOverrides.back();
+                        }
+                        return &(*it);
+                    }();
+                    o->value = v;
+                    SWE::WetController::GetSingleton()->RefreshNow();
+                }
+                if (!manual) ImGui::EndDisabled();
+
+                // Category Mask
+                ImGui::TableSetColumnIndex(3);
                 std::uint8_t maskCur = ovrS ? ovrS->mask : 0x0F;
                 bool mSkin = (maskCur & 0x01) != 0;
                 bool mHair = (maskCur & 0x02) != 0;
@@ -659,7 +692,7 @@ void __stdcall UI::WetConfig::RenderNPCs() {
                     SWE::WetController::GetSingleton()->RefreshNow();
                 }
 
-                ImGui::TableSetColumnIndex(3);
+                ImGui::TableSetColumnIndex(4);
                 bool bothEn = ((ovrS && ovrS->enabled) || (trkS && trkS->enabled));
                 if (ImGui::Checkbox("##en", &bothEn)) {
                     {
@@ -677,7 +710,7 @@ void __stdcall UI::WetConfig::RenderNPCs() {
                     SWE::WetController::GetSingleton()->RefreshNow();
                 }
 
-                ImGui::TableSetColumnIndex(4);
+                ImGui::TableSetColumnIndex(5);
                 if (ImGui::SmallButton("X")) {
                     {
                         std::unique_lock lk(Settings::actorsMutex);

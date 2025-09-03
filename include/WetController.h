@@ -103,7 +103,7 @@ namespace SWE {
         std::chrono::steady_clock::time_point _lastTick = std::chrono::steady_clock::now();
 
         void UpdateActorWetness(RE::Actor* a, float dt, const std::vector<Settings::FormSpec>& overrides,
-                                bool allowEnvWet = true);
+                                bool allowEnvWet = true, bool manualMode = false);
         void ApplyWetnessMaterials(RE::Actor* a, const float wetByCat[4]);
 
         bool IsRainingOrSnowing() const;
