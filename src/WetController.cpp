@@ -21,7 +21,7 @@ using namespace std::chrono_literals;
     #define SWE_RAY_DEBUG 0
 #endif
 #ifndef SWE_WF_DEBUG
-    #define SWE_WF_DEBUG 1
+    #define SWE_WF_DEBUG 0
 #endif
 
 #ifndef SWE_ROOF_SAMPLES
@@ -552,8 +552,8 @@ namespace SWE {
 
 #if SWE_WF_DEBUG
         logger::info(
-            "[SWE] WF cand: {:08X} hardName={} auxName={} particleOnly={} wideTall={} H={:.1f} ED='{}' MD='{}'",
-            r->GetFormID(), (int)hardName, (int)auxName, (int)particleOnly, (int)wideTall, H, ed ? ed : "",
+            "[SWE] WF cand: {:08X} hardName={} auxName={} particleOnly={} H={:.1f} ED='{}' MD='{}'",
+            r->GetFormID(), (int)hardName, (int)auxName, (int)particleOnly, H, ed ? ed : "",
             model ? model : "");
         if (match) {
             logger::info("[SWE] WF MATCH: {:08X} ED='{}' MD='{}'", r->GetFormID(), ed ? ed : "", model ? model : "");
@@ -881,9 +881,9 @@ namespace SWE {
                             if (auto* tm = base ? base->As<RE::TESModel>() : nullptr) mdl = tm->GetModel();
 
                             logger::info(
-                                "[SWE] WF scan: {:08X} FT={} ED='{}' MD='{}' 3D={} dXY={:.1f} dZ={:.1f} plausible={}",
+                                "[SWE] WF scan: {:08X} FT={} ED='{}' MD='{}' 3D={} plausible={}",
                                 ref.GetFormID(), base ? (int)base->GetFormType() : -1, ed ? ed : "", mdl ? mdl : "",
-                                ref.Is3DLoaded(), std::sqrt(d2xy), dzAbs, (int)plausible);
+                                ref.Is3DLoaded(), (int)plausible);
                         }
 #endif
 
