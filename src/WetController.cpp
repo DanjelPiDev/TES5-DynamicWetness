@@ -3,25 +3,25 @@
 #include <algorithm>
 #include <functional>
 
-#include "Settings.h"
 #include "PapyrusAPI.h"
-
-#include "REL/Relocation.h"
-
 #include "RE/B/BSLightingShaderMaterialBase.h"
 #include "RE/B/BSTextureSet.h"
-
 #include "RE/B/bhkCollisionObject.h"
 #include "RE/B/bhkPickData.h"
 #include "RE/B/bhkWorld.h"
-#include "RE/T/TESObjectCELL.h"
 #include "RE/H/hkpWorldRayCastInput.h"
 #include "RE/H/hkpWorldRayCastOutput.h"
+#include "RE/T/TESObjectCELL.h"
+#include "REL/Relocation.h"
+#include "Settings.h"
 
 using namespace std::chrono_literals;
 
 #ifndef SWE_RAY_DEBUG
     #define SWE_RAY_DEBUG 0
+#endif
+#ifndef SWE_WF_DEBUG
+    #define SWE_WF_DEBUG 1
 #endif
 
 #ifndef SWE_ROOF_SAMPLES
@@ -32,6 +32,13 @@ namespace SWE {
     enum class MatCat { SkinFace, Hair, ArmorClothing, Weapon, Other };
 
     static inline float clampf(float v, float lo, float hi) { return (v < lo) ? lo : (v > hi) ? hi : v; }
+
+    template <class Fn>
+    static void ForEachRefInRange(const RE::NiPoint3& center, float radius, Fn&& fn) {
+        if (auto* tes = RE::TES::GetSingleton()) {
+            tes->ForEachReferenceInRange(center, radius, [&](RE::TESObjectREFR& ref) { return fn(ref); });
+        }
+    }
 
     static inline int CatIndex(MatCat c) {
         switch (c) {
@@ -45,6 +52,18 @@ namespace SWE {
                 return 3;
             default:
                 return 2;
+        }
+    }
+    static void ForEachGeometry(RE::NiAVObject* obj, const std::function<void(RE::BSGeometry*)>& fn) {
+        if (!obj) return;
+
+        if (auto* geom = obj->AsGeometry()) {
+            fn(geom);
+        }
+        if (auto* node = obj->AsNode()) {
+            for (auto& child : node->GetChildren()) {
+                ForEachGeometry(child.get(), fn);
+            }
         }
     }
     static inline void SetSpecularEnabled(RE::BSShaderProperty* sp, bool on) {
@@ -63,6 +82,24 @@ namespace SWE {
         std::string t(s);
         std::transform(t.begin(), t.end(), t.begin(), [](unsigned char c) { return std::tolower(c); });
         return n.find(t) != std::string::npos;
+    }
+    static bool HasAuxKeywords(const RE::NiAVObject* root) {
+        if (!root) return false;
+        auto hasAny = [](const RE::NiAVObject* o) {
+            return NameHas(o, "splash") || NameHas(o, "foam") || NameHas(o, "mist") || NameHas(o, "spray") ||
+                   NameHas(o, "ripple") || NameHas(o, "droplet");
+        };
+        const RE::NiAVObject* cur = root;
+        for (int i = 0; i < 4 && cur; ++i) {
+            if (hasAny(cur)) return true;
+            cur = cur->parent;
+        }
+        bool hit = false;
+        ForEachGeometry(const_cast<RE::NiAVObject*>(root), [&](RE::BSGeometry* g) {
+            if (hit) return;
+            if (hasAny(g)) hit = true;
+        });
+        return hit;
     }
     static bool LooksLikeHeatSource(const RE::TESObjectREFR* r) {
         if (!r) return false;
@@ -104,76 +141,6 @@ namespace SWE {
         }
 
         return false;
-    }
-    static void ForEachGeometry(RE::NiAVObject* obj, const std::function<void(RE::BSGeometry*)>& fn) {
-        if (!obj) return;
-
-        if (auto* geom = obj->AsGeometry()) {
-            fn(geom);
-        }
-        if (auto* node = obj->AsNode()) {
-            for (auto& child : node->GetChildren()) {
-                ForEachGeometry(child.get(), fn);
-            }
-        }
-    }
-    static bool LooksLikeWaterfall(RE::TESObjectREFR* r) {
-        if (!r) return false;
-        auto lc = [](std::string s) {
-            std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return std::tolower(c); });
-            return s;
-        };
-
-        auto* base = r->GetBaseObject();
-        if (!base) return false;
-        if (!skyrim_cast<RE::TESObjectSTAT*>(base) && !skyrim_cast<RE::BGSMovableStatic*>(base)) {
-            return false;
-        }
-
-        if (const char* ed = base->GetFormEditorID(); ed && *ed) {
-            std::string e = lc(ed);
-            const bool hasWF = e.find("waterfall") != std::string::npos;
-            const bool isAux = (e.find("splash") != std::string::npos) || (e.find("ripple") != std::string::npos) ||
-                               (e.find("foam") != std::string::npos) || (e.find("mist") != std::string::npos) ||
-                               (e.find("spray") != std::string::npos) || (e.find("droplet") != std::string::npos);
-            if (hasWF && !isAux) {
-                return true;
-            } else {
-                return false;
-            }
-        }
-
-        if (auto* tm = skyrim_cast<RE::TESModel*>(base)) {
-            if (const char* model = tm->GetModel(); model && model[0]) {
-                std::string m = lc(model);
-                const bool hasWF = (m.find("waterfall") != std::string::npos) ||
-                                   (m.find("fx\\waterfall") != std::string::npos) ||
-                                   (m.find("fx/waterfall") != std::string::npos);
-                const bool isAux = (m.find("splash") != std::string::npos) || (m.find("ripple") != std::string::npos) ||
-                                   (m.find("foam") != std::string::npos) || (m.find("mist") != std::string::npos) ||
-                                   (m.find("spray") != std::string::npos) || (m.find("droplet") != std::string::npos);
-                if (hasWF && !isAux) return true;
-            }
-        }
-        return false;
-    }
-    static bool HasAuxKeywords(const RE::NiAVObject* root) {
-        if (!root) return false;
-        auto hasAny = [](const RE::NiAVObject* o) {
-            return NameHas(o, "splash") || NameHas(o, "foam") || NameHas(o, "mist") || NameHas(o, "spray") ||
-                   NameHas(o, "ripple") || NameHas(o, "droplet");
-        };
-        const RE::NiAVObject* cur = root;
-        for (int i = 0; i < 4 && cur; ++i) {
-            if (hasAny(cur)) return true;
-            cur = cur->parent;
-        }
-        bool hit = false;
-        ForEachGeometry(const_cast<RE::NiAVObject*>(root), [&](RE::BSGeometry* g) {
-            if (hit) return;
-            if (hasAny(g)) hit = true;
-        });
-        return hit;
     }
     static bool MostlyParticleOrEffect(const RE::NiAVObject* root) {
         if (!root) return false;
@@ -536,6 +503,65 @@ namespace SWE {
         outMax = mx;
         return true;
     }
+    static bool LooksLikeWaterfall(RE::TESObjectREFR* r) {
+        if (!r) return false;
+
+        RE::TESForm* base = r->GetBaseObject();
+        if (!base) return false;
+
+        auto lc_contains = [](const char* p, std::initializer_list<const char*> needles) -> bool {
+            if (!p || !p[0]) return false;
+            std::string s(p);
+            std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+            for (auto n : needles) {
+                if (s.find(n) != std::string::npos) return true;
+            }
+            return false;
+        };
+
+        const char* ed = base->GetFormEditorID();
+        const char* model = nullptr;
+        if (auto* tm = base->As<RE::TESModel>()) {
+            model = tm->GetModel();
+        }
+
+        const bool hardName = lc_contains(ed, {"waterfall", "water fall", "fxwaterfall"}) ||
+                              lc_contains(model, {"waterfall", "water fall", "fxwaterfall"});
+
+        RE::NiAVObject* root = r->Get3D();
+        if (!root) return hardName;
+
+        bool auxName =
+            HasAuxKeywords(root) || NameHas(root, "waterfall") || NameHas(root, "water fall") || NameHas(root, "falls");
+
+        RE::NiPoint3 bmin{}, bmax{};
+        if (!BuildWorldAABB(root, bmin, bmax)) {
+            return hardName;
+        }
+
+        const float H = bmax.z - bmin.z;
+        const bool particleOnly = MostlyParticleOrEffect(root);
+        const bool wideTall = LooksLikeWideTallWaterSheet(bmin, bmax);
+
+        bool match = false;
+        if (wideTall) {
+            match = hardName || auxName || !particleOnly;
+        } else if (particleOnly && H >= 160.f) {
+            match = hardName || auxName;
+        }
+
+#if SWE_WF_DEBUG
+        logger::info(
+            "[SWE] WF cand: {:08X} hardName={} auxName={} particleOnly={} wideTall={} H={:.1f} ED='{}' MD='{}'",
+            r->GetFormID(), (int)hardName, (int)auxName, (int)particleOnly, (int)wideTall, H, ed ? ed : "",
+            model ? model : "");
+        if (match) {
+            logger::info("[SWE] WF MATCH: {:08X} ED='{}' MD='{}'", r->GetFormID(), ed ? ed : "", model ? model : "");
+        }
+#endif
+
+        return match;
+    }
 
     void WetController::Install() { _lastTick = std::chrono::steady_clock::now(); }
 
@@ -638,15 +664,18 @@ namespace SWE {
             if (ui->GameIsPaused() || ui->IsMenuOpen(RE::MainMenu::MENU_NAME)) return;
         }
 
+        const auto overridesSnap = Settings::SnapshotActorOverrides();
+        const auto trackedSnap = Settings::SnapshotTrackedActors();
+
         RE::Actor* player = RE::PlayerCharacter::GetSingleton();
-        if (player) UpdateActorWetness(player, dt);
+        if (player) UpdateActorWetness(player, dt, overridesSnap);
 
         if (Settings::affectNPCs.load()) {
             if (auto* proc = RE::ProcessLists::GetSingleton()) {
                 std::unordered_set<std::uint32_t> allow;
                 const bool optIn = Settings::npcOptInOnly.load();
                 if (optIn) {
-                    for (const auto& fs : Settings::trackedActors) {
+                    for (const auto& fs : trackedSnap) {
                         if (fs.enabled && fs.id != 0) allow.insert(fs.id);
                     }
                 }
@@ -679,7 +708,6 @@ namespace SWE {
 
                     if (useRad) {
                         const float d2 = a->GetPosition().GetSquaredDistance(pcPos);
-
                         if (d2 > radiusSq) {
                             auto it = _wet.find(a->GetFormID());
                             if (it != _wet.end() &&
@@ -692,19 +720,20 @@ namespace SWE {
                             continue;
                         }
                     }
-                    UpdateActorWetness(a, dt);
+
+                    UpdateActorWetness(a, dt, overridesSnap);
                 }
             }
         }
     }
 
-    void WetController::UpdateActorWetness(RE::Actor* a, float dt) {
+    void WetController::UpdateActorWetness(RE::Actor* a, float dt, const std::vector<Settings::FormSpec>& overrides) {
         if (!a) return;
 
         auto getOverride = [&](float& outW, std::uint8_t& outMask) -> bool {
             if (auto* ab = a->GetActorBase()) {
                 const std::uint32_t fid = ab->GetFormID();
-                for (const auto& fs : Settings::actorOverrides) {
+                for (const auto& fs : overrides) {
                     if (!fs.enabled || fs.id == 0) continue;
                     if (fs.id == fid) {
                         outW = clampf(fs.value, 0.0f, 1.0f);
@@ -761,7 +790,7 @@ namespace SWE {
         if (!inWater && Settings::waterfallEnabled.load()) {
             const auto now = std::chrono::steady_clock::now();
             if (wd.lastWaterfallProbe.time_since_epoch().count() == 0 || (now - wd.lastWaterfallProbe) > 800ms) {
-                const float r2 = Settings::nearWaterfallRadius.load() * Settings::nearWaterfallRadius.load();
+                // const float r2 = Settings::nearWaterfallRadius.load() * Settings::nearWaterfallRadius.load();
                 bool found = false;
                 if (auto* cell = a->GetParentCell()) {
                     const RE::NiPoint3 center = a->GetPosition();
@@ -769,19 +798,56 @@ namespace SWE {
                         if (found) return RE::BSContainer::ForEachResult::kStop;
                         if (&ref == a) return RE::BSContainer::ForEachResult::kContinue;
 
-                        bool plausible = LooksLikeWaterfall(&ref);
                         RE::NiPoint3 bmin{}, bmax{};
                         RE::NiAVObject* root = ref.Get3D();
 
-                        RE::NiPoint3 testPos = ref.GetPosition();
+                        auto dist2AABB_XY = [&](const RE::NiPoint3& p) -> float {
+                            float dx = 0.f, dy = 0.f;
+                            if (p.x < bmin.x)
+                                dx = bmin.x - p.x;
+                            else if (p.x > bmax.x)
+                                dx = p.x - bmax.x;
+                            if (p.y < bmin.y)
+                                dy = bmin.y - p.y;
+                            else if (p.y > bmax.y)
+                                dy = p.y - bmax.y;
+                            return dx * dx + dy * dy;
+                        };
+
+                        float d2xy = FLT_MAX;
+                        float dzAbs = FLT_MAX;
+
                         if (root && BuildWorldAABB(root, bmin, bmax)) {
-                            testPos.x = 0.5f * (bmin.x + bmax.x);
-                            testPos.y = 0.5f * (bmin.y + bmax.y);
-                            if (LooksLikeTallWaterSheet(bmin, bmax)) plausible = true;
+                            d2xy = dist2AABB_XY(center);
+                            const float zc = 0.5f * (bmin.z + bmax.z);
+                            dzAbs = std::abs(center.z - zc);
+                        } else {
+                            const RE::NiPoint3 rp = ref.GetPosition();
+                            d2xy = Dist2XY(rp, center);
+                            dzAbs = std::abs(rp.z - center.z);
                         }
 
                         const float r2xy = Settings::nearWaterfallRadius.load() * Settings::nearWaterfallRadius.load();
-                        if (Dist2XY(testPos, center) > r2xy) return RE::BSContainer::ForEachResult::kContinue;
+                        if (d2xy > r2xy) return RE::BSContainer::ForEachResult::kContinue;
+
+                        if (dzAbs > std::max(1200.f, Settings::nearWaterfallRadius.load() * 1.5f))
+                            return RE::BSContainer::ForEachResult::kContinue;
+
+                        bool plausible = LooksLikeWaterfall(&ref);
+
+#if SWE_WF_DEBUG
+                        {
+                            RE::TESForm* base = ref.GetBaseObject();
+                            const char* ed = base ? base->GetFormEditorID() : "";
+                            const char* mdl = "";
+                            if (auto* tm = base ? base->As<RE::TESModel>() : nullptr) mdl = tm->GetModel();
+
+                            logger::info(
+                                "[SWE] WF scan: {:08X} FT={} ED='{}' MD='{}' 3D={} dXY={:.1f} dZ={:.1f} plausible={}",
+                                ref.GetFormID(), base ? (int)base->GetFormType() : -1, ed ? ed : "", mdl ? mdl : "",
+                                ref.Is3DLoaded(), std::sqrt(d2xy), dzAbs, (int)plausible);
+                        }
+#endif
 
                         if (!plausible) {
                             return RE::BSContainer::ForEachResult::kContinue;
@@ -790,6 +856,7 @@ namespace SWE {
                         if (!ref.Is3DLoaded() || !root) {
                             return RE::BSContainer::ForEachResult::kContinue;
                         }
+
                         bool requireBelowTop = true;
                         if (BuildWorldAABB(root, bmin, bmax)) {
                             if (ActorHeadZ(a) - bmax.z > 256.0f) {
@@ -797,10 +864,16 @@ namespace SWE {
                             }
                         }
 
-                        const bool inside = IsInsideWaterfallFX(
-                            a, &ref, std::max(0.f, Settings::waterfallWidthPad.load()),
-                            std::max(0.f, Settings::waterfallDepthPad.load()),
-                            std::max(0.f, Settings::waterfallZPad.load()), requireBelowTop);
+                        const bool inside =
+                            IsInsideWaterfallFX(a, &ref, std::max(0.f, Settings::waterfallWidthPad.load()),
+                                                std::max(0.f, Settings::waterfallDepthPad.load()),
+                                                std::max(0.f, Settings::waterfallZPad.load()), requireBelowTop);
+
+#if SWE_WF_DEBUG
+                        if (inside) {
+                            logger::info("[SWE] WF inside: {:08X}", ref.GetFormID());
+                        }
+#endif
 
                         if (inside) {
                             found = true;
@@ -862,6 +935,7 @@ namespace SWE {
                 const float zeros[4]{0, 0, 0, 0};
                 ApplyWetnessMaterials(a, zeros);
                 wd.lastAppliedCat[0] = wd.lastAppliedCat[1] = wd.lastAppliedCat[2] = wd.lastAppliedCat[3] = 0.f;
+                wd.lastAppliedWet = 0.0f;
             }
         } else {
             bool anyChange = false;
@@ -873,6 +947,7 @@ namespace SWE {
             if (anyChange) {
                 ApplyWetnessMaterials(a, wetByCat);
                 for (int i = 0; i < 4; ++i) wd.lastAppliedCat[i] = wetByCat[i];
+                wd.lastAppliedWet = wFinal;
             }
         }
     }
@@ -1066,7 +1141,8 @@ namespace SWE {
         return found;
     }
 
-    void WetController::ComputeWetByCategory(WetData& wd, float baseWet, float outWetByCat[4], float dt, bool envDominates) {
+    void WetController::ComputeWetByCategory(WetData& wd, float baseWet, float outWetByCat[4], float dt,
+                                             bool envDominates) {
         std::scoped_lock l(_mtx);
 
         for (auto it = wd.extSources.begin(); it != wd.extSources.end();) {
@@ -1080,6 +1156,7 @@ namespace SWE {
             ++it;
         }
 
+        // Important: Environmental wetness sources override everything else
         if (envDominates) {
             for (int i = 0; i < 4; ++i) {
                 wd.activeOv[i] = {};
@@ -1088,14 +1165,21 @@ namespace SWE {
             return;
         }
 
+        const float prevMax = std::max(std::max(wd.lastAppliedCat[0], wd.lastAppliedCat[1]),
+                                       std::max(wd.lastAppliedCat[2], wd.lastAppliedCat[3]));
+        const float delta = baseWet - prevMax;
+
+        float baseByCat[4];
         for (int i = 0; i < 4; ++i) {
             wd.activeOv[i] = {};
-            outWetByCat[i] = baseWet;
+            baseByCat[i] = clampf(wd.lastAppliedCat[i] + delta, 0.f, 1.f);
+            outWetByCat[i] = baseByCat[i];
         }
         if (wd.extSources.empty()) return;
 
         float passthrough[4] = {0.f, 0.f, 0.f, 0.f};
         bool zeroBase[4] = {false, false, false, false};
+        bool noAutoDry[4] = {false, false, false, false};
 
         auto mergeOv = [&](WetData::CatOverrides& ov, const OverrideParams& sOv) {
             ov.any = true;
@@ -1112,38 +1196,38 @@ namespace SWE {
 
         for (auto& [k, s] : wd.extSources) {
             if (s.expiryRemainingSec == 0.f) continue;
-
             const bool isPT = (s.flags & SWE::Papyrus::SWE_FLAG_PASSTHROUGH) != 0;
             const bool zBase = (s.flags & SWE::Papyrus::SWE_FLAG_ZERO_BASE) != 0;
+            const bool nad = (s.flags & SWE::Papyrus::SWE_FLAG_NO_AUTODRY) != 0;
 
-            for (int ci = 0; ci < 4; ++ci) {
-                if ((s.catMask & (1u << ci)) == 0) continue;
-
-                mergeOv(wd.activeOv[ci], s.ov);
-
-                if (isPT) passthrough[ci] += s.value;
-                if (zBase) zeroBase[ci] = true;
-            }
+            for (int ci = 0; ci < 4; ++ci)
+                if (s.catMask & (1u << ci)) {
+                    mergeOv(wd.activeOv[ci], s.ov);
+                    if (isPT) passthrough[ci] += s.value;
+                    if (zBase) zeroBase[ci] = true;
+                    if (nad) noAutoDry[ci] = true;
+                }
         }
 
-        float baseByCat[4] = {baseWet, baseWet, baseWet, baseWet};
-        for (int ci = 0; ci < 4; ++ci)
-            if (zeroBase[ci]) baseByCat[ci] = 0.f;
+        for (int ci = 0; ci < 4; ++ci) {
+            if (zeroBase[ci]) {
+                baseByCat[ci] = 0.f;
+            } else if (noAutoDry[ci] && delta < 0.f) {
+                baseByCat[ci] = wd.lastAppliedCat[ci];
+            }
+        }
 
         auto blendOne = [&](int ci) -> float {
             float sum = 0.f, mx = 0.f;
             bool any = false;
-
             for (auto& [k, s] : wd.extSources) {
                 if (s.expiryRemainingSec == 0.f) continue;
                 if ((s.flags & SWE::Papyrus::SWE_FLAG_PASSTHROUGH) != 0) continue;
                 if ((s.catMask & (1u << ci)) == 0) continue;
-
                 any = true;
                 sum += s.value;
                 mx = std::max(mx, s.value);
             }
-
             if (!any) return baseByCat[ci];
 
             switch (Settings::externalBlendMode.load()) {
@@ -1161,12 +1245,9 @@ namespace SWE {
         };
 
         for (int ci = 0; ci < 4; ++ci) {
-            float mixed = blendOne(ci);
-            outWetByCat[ci] = clampf(mixed + passthrough[ci], 0.f, 1.f);
+            outWetByCat[ci] = clampf(blendOne(ci) + passthrough[ci], 0.f, 1.f);
         }
     }
-
-
 
     bool WetController::IsInsideWaterfallFX(const RE::Actor* a, const RE::TESObjectREFR* wfRef, float padX, float padY,
                                             float padZ, bool requireBelowTop) const {
@@ -1219,7 +1300,6 @@ namespace SWE {
         for (auto lyr : kPrim) {
             const auto fi = MakeFilterInfo(lyr, 0xFFFF, 0, 0);
             if (CastOnce(bw, from, to, fi, true)) return true;
-
         }
         return false;
     }
@@ -1306,12 +1386,19 @@ namespace SWE {
         src.catMask = static_cast<std::uint8_t>(catMask & SWE::Papyrus::SWE_CAT_MASK_4BIT);
         src.flags = flags;
     }
-    
+
     void WetController::SetExternalWetnessEx(RE::Actor* a, std::string key, float value, float durationSec,
                                              std::uint8_t catMask, const OverrideParams& ov) {
-        SetExternalWetnessMask(a, key, value, durationSec, catMask);
+        if (!a) return;
+        key = NormalizeKey(std::move(key));
+        if (key.empty()) return;
+
         std::scoped_lock l(_mtx);
-        auto& src = _wet[a->GetFormID()].extSources[NormalizeKey(key)];
+        auto& src = _wet[a->GetFormID()].extSources[key];
+        src.value = clampf(value, 0.f, 1.f);
+        src.expiryRemainingSec = (durationSec > 0.f) ? durationSec : -1.f;
+        src.catMask = static_cast<std::uint8_t>(catMask & SWE::Papyrus::SWE_CAT_MASK_4BIT);
+        // Important: do NOT touch src.flags -> keep existing flags
         src.ov = ov;
     }
 
@@ -1344,10 +1431,10 @@ namespace SWE {
     }
 
     /*
-    * =================================
-    * Serialization and Deserialization
-    * =================================
-    */
+     * =================================
+     * Serialization and Deserialization
+     * =================================
+     */
     void WetController::Serialize(SKSE::SerializationInterface* intfc) {
         std::scoped_lock l(_mtx);
 

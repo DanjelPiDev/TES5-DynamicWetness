@@ -63,6 +63,9 @@ namespace Settings {
 
     extern std::vector<FormSpec> actorOverrides;
     extern std::vector<FormSpec> trackedActors;
+    extern std::shared_mutex actorsMutex;
+    std::vector<FormSpec> SnapshotTrackedActors();
+    std::vector<FormSpec> SnapshotActorOverrides();
 
     std::string DefaultPath();
 

@@ -37,7 +37,7 @@ namespace Settings {
     std::atomic<float> minGlossiness{0.0f};
     std::atomic<float> minSpecularStrength{0.0f};
 
-    std::atomic<bool> waterfallEnabled{true};
+    std::atomic<bool> waterfallEnabled{false};
     std::atomic<float> secondsToSoakWaterfall{8.0f};
     std::atomic<float> nearWaterfallRadius{128.0f};
     std::atomic<float> waterfallWidthPad{45.0f};
@@ -62,6 +62,16 @@ namespace Settings {
 
     std::vector<FormSpec> actorOverrides;
     std::vector<FormSpec> trackedActors;
+    std::shared_mutex actorsMutex;
+
+    std::vector<FormSpec> SnapshotTrackedActors() {
+        std::shared_lock lk(actorsMutex);
+        return trackedActors;  // copy
+    }
+    std::vector<FormSpec> SnapshotActorOverrides() {
+        std::shared_lock lk(actorsMutex);
+        return actorOverrides;  // copy
+    }
 
     static std::uint32_t parse_form_id(const nlohmann::json& jv) {
         // Accept either number or hex string "0xXXXXXXXX"/"XXXXXXXX"
@@ -189,8 +199,14 @@ namespace Settings {
             apply_if(j, "pbrMaxSpecArmor", pbrMaxSpecArmor);
 
             apply_if(j, "npcOptInOnly", npcOptInOnly);
-            load_formspec_array(j, "actorOverrides", actorOverrides);
-            load_formspec_array(j, "trackedActors", trackedActors);
+            std::vector<FormSpec> aoTmp, taTmp;
+            load_formspec_array(j, "actorOverrides", aoTmp);
+            load_formspec_array(j, "trackedActors", taTmp);
+            {
+                std::unique_lock lk(actorsMutex);
+                actorOverrides = std::move(aoTmp);
+                trackedActors = std::move(taTmp);
+            }
         } catch (...) {
         }
     }
@@ -246,8 +262,10 @@ namespace Settings {
                       {"pbrMaxSpecArmor", pbrMaxSpecArmor.load()},
 
                       {"updateIntervalMs", updateIntervalMs.load()}};
-            j["actorOverrides"] = dump_formspec_array(actorOverrides);
-            j["trackedActors"] = dump_formspec_array(trackedActors);
+            auto ao = SnapshotActorOverrides();
+            auto ta = SnapshotTrackedActors();
+            j["actorOverrides"] = dump_formspec_array(ao);
+            j["trackedActors"] = dump_formspec_array(ta);
             std::ofstream o(path, std::ios::trunc);
             o << j.dump(2);
         } catch (...) {
@@ -281,7 +299,7 @@ namespace Settings {
         minGlossiness.store(0.0f);
         minSpecularStrength.store(0.0f);
 
-        waterfallEnabled.store(true);
+        waterfallEnabled.store(false);
         secondsToSoakWaterfall.store(8.0f);
         nearWaterfallRadius.store(640.0f);
         waterfallWidthPad.store(45.0f);
@@ -303,7 +321,10 @@ namespace Settings {
         pbrMaxGlossArmor.store(300.0f);
         pbrMaxSpecArmor.store(5.0f);
 
-        actorOverrides.clear();
-        trackedActors.clear();
+        {
+            std::unique_lock lk(actorsMutex);
+            actorOverrides.clear();
+            trackedActors.clear();
+        }
     }
 }
