@@ -275,32 +275,75 @@ namespace SWE {
         }
         return false;
     }
+    static inline std::string lc_norm_path(const char* p) {
+        if (!p || !p[0]) return {};
+        std::string s(p);
+        std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+        std::replace(s.begin(), s.end(), '\\', '/');
+        s.erase(std::unique(s.begin(), s.end(), [](char a, char b) { return a == '/' && b == '/'; }), s.end());
+        return s;
+    }
+
+    static inline std::string_view filename_no_ext(std::string_view path) {
+        const size_t slash = path.find_last_of('/');
+        std::string_view file = (slash == std::string::npos) ? path : path.substr(slash + 1);
+        const size_t dot = file.find_last_of('.');
+        return (dot == std::string::npos) ? file : file.substr(0, dot);
+    }
+
+    static bool has_suffix_token(std::string_view path, std::string_view token) {
+        const std::string_view base = filename_no_ext(path);
+        if (base.size() < token.size()) return false;
+        const size_t pos = base.size() - token.size();
+        if (base.substr(pos) != token) return false;
+        if (pos == 0) return true;
+        const char prev = base[pos - 1];
+        return prev == '_' || prev == '-' || prev == '.';
+    }
+
+    static bool has_ambiguous_p_suffix(std::string_view path) { return has_suffix_token(path, "p"); }
+
+    static bool contains_word(std::string_view s, std::string_view w) { return s.find(w) != std::string::npos; }
+
+    static bool strong_pbr_signal(std::string_view p) {
+        if (contains_word(p, "/pbr/") || contains_word(p, "_pbr") || contains_word(p, "/pbr_")) return true;
+
+        if (has_suffix_token(p, "orm") || has_suffix_token(p, "rma") || has_suffix_token(p, "rmao") ||
+            has_suffix_token(p, "rmaos") || has_suffix_token(p, "rmos") || has_suffix_token(p, "mrao") ||
+            has_suffix_token(p, "maos"))
+            return true;
+
+        if (contains_word(p, "roughness") || contains_word(p, "rough") || contains_word(p, "metalness") ||
+            contains_word(p, "metallic") || contains_word(p, "metal"))
+            return true;
+
+        return false;
+    }
+
     static bool MaterialLooksPBR(RE::BSLightingShaderMaterialBase* mb) {
         if (!mb) return false;
         RE::BSTextureSet* ts = mb->textureSet.get();
-        auto hasKey = [](const char* p, std::string_view key) {
-            if (!p || !p[0]) return false;
-            std::string s(p);
-            std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return std::tolower(c); });
-            return s.find(key) != std::string::npos;
+        auto slot = [&](RE::BSTextureSet::Texture t) -> std::string {
+            return lc_norm_path(ts ? ts->GetTexturePath(t) : nullptr);
         };
-        auto slot = [&](RE::BSTextureSet::Texture t) -> const char* { return ts ? ts->GetTexturePath(t) : nullptr; };
 
-        const char* d = slot(RE::BSTextureSet::Texture::kDiffuse);
-        const char* n = slot(RE::BSTextureSet::Texture::kNormal);
-        const char* s0 = slot(RE::BSTextureSet::Texture::kSpecular);
-        const char* g = slot(RE::BSTextureSet::Texture::kGlowMap);
-        const char* e = slot(RE::BSTextureSet::Texture::kEnvironmentMask);
-        const char* b = slot(RE::BSTextureSet::Texture::kBacklightMask);
-
-        auto looks = [&](const char* p) {
-            return hasKey(p, "rough") || hasKey(p, "metal") || hasKey(p, "_rm") || hasKey(p, "_orm") ||
-                   hasKey(p, ".orm") || hasKey(p, ".rma") || hasKey(p, "_rma") || hasKey(p, "/pbr") ||
-                   hasKey(p, "\\pbr");
+        std::string paths[6] = {
+            slot(RE::BSTextureSet::Texture::kDiffuse),         slot(RE::BSTextureSet::Texture::kNormal),
+            slot(RE::BSTextureSet::Texture::kSpecular),        slot(RE::BSTextureSet::Texture::kGlowMap),
+            slot(RE::BSTextureSet::Texture::kEnvironmentMask), slot(RE::BSTextureSet::Texture::kBacklightMask),
         };
-        // check a few likely slots
-        if (looks(d) || looks(n) || looks(s0) || looks(g) || looks(e) || looks(b)) return true;
-        return false;
+
+        bool anyStrong = false;
+        bool anyAmbigP = false;
+
+        for (const auto& p : paths) {
+            if (p.empty()) continue;
+            if (strong_pbr_signal(p)) anyStrong = true;
+            if (has_ambiguous_p_suffix(p)) anyAmbigP = true;
+        }
+
+        // _p only textures are ambiguous, could be Parallax Height or could be ORM
+        return anyStrong || (anyAmbigP && anyStrong);
     }
     static MatCat ClassifyGeom(RE::BSGeometry* g, RE::BSLightingShaderProperty* lsp) {
         if (lsp && lsp->material) {
