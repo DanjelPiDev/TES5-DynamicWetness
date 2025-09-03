@@ -490,8 +490,6 @@ void __stdcall UI::WetConfig::RenderNPCs() {
                                 std::unique_lock lk(Settings::actorsMutex);
                                 if (!find_by_id(Settings::trackedActors, fid))
                                     Settings::trackedActors.push_back({"", fid, 1.0f, true, 0x0F});
-                                if (!find_by_id(Settings::actorOverrides, fid))
-                                    Settings::actorOverrides.push_back({"", fid, 1.0f, true, 0x0F});
                             }
                             SWE::WetController::GetSingleton()->RefreshNow();
                         }
@@ -565,8 +563,6 @@ void __stdcall UI::WetConfig::RenderNPCs() {
                                     std::unique_lock lk(Settings::actorsMutex);
                                     if (!find_by_id(Settings::trackedActors, fid))
                                         Settings::trackedActors.push_back({"", fid, 1.0f, true, 0x0F});
-                                    if (!find_by_id(Settings::actorOverrides, fid))
-                                        Settings::actorOverrides.push_back({"", fid, 1.0f, true, 0x0F});
                                 }
                                 SWE::WetController::GetSingleton()->RefreshNow();
                             }
@@ -592,9 +588,8 @@ void __stdcall UI::WetConfig::RenderNPCs() {
         for (const auto& fs : overridesSnap)
             if (std::find(ids.begin(), ids.end(), fs.id) == ids.end()) ids.push_back(fs.id);
 
-        if (ImGui::BeginTable("npc_mgr_tbl", 6, ImGuiTableFlags_Resizable | ImGuiTableFlags_Borders)) {
+        if (ImGui::BeginTable("npc_mgr_tbl", 5, ImGuiTableFlags_Resizable | ImGuiTableFlags_Borders)) {
             ImGui::TableSetupColumn("Actor");
-            ImGui::TableSetupColumn("FormID");
             ImGui::TableSetupColumn("Wetness (0..1)");
             ImGui::TableSetupColumn("Categories");
             ImGui::TableSetupColumn("Enabled");
@@ -615,12 +610,8 @@ void __stdcall UI::WetConfig::RenderNPCs() {
                 if (auto* npc = RE::TESForm::LookupByID<RE::TESNPC>(fid)) nm = npc->GetName();
                 ImGui::TextUnformatted(nm && nm[0] ? nm : "(unknown)");
 
-                // FormID
-                ImGui::TableSetColumnIndex(1);
-                ImGui::Text("0x%08X", fid);
-
                 // Wetness Slider (Override-Commit)
-                ImGui::TableSetColumnIndex(2);
+                ImGui::TableSetColumnIndex(1);
                 float v = ovrS ? ovrS->value : 1.0f;
                 if (ImGui::SliderFloat("##w", &v, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp)) {
                     {
@@ -635,7 +626,7 @@ void __stdcall UI::WetConfig::RenderNPCs() {
                 }
 
                 // Category Mask
-                ImGui::TableSetColumnIndex(3);
+                ImGui::TableSetColumnIndex(2);
                 std::uint8_t maskCur = ovrS ? ovrS->mask : 0x0F;
                 bool mSkin = (maskCur & 0x01) != 0;
                 bool mHair = (maskCur & 0x02) != 0;
@@ -668,16 +659,15 @@ void __stdcall UI::WetConfig::RenderNPCs() {
                     SWE::WetController::GetSingleton()->RefreshNow();
                 }
 
-                ImGui::TableSetColumnIndex(4);
+                ImGui::TableSetColumnIndex(3);
                 bool bothEn = ((ovrS && ovrS->enabled) || (trkS && trkS->enabled));
                 if (ImGui::Checkbox("##en", &bothEn)) {
                     {
                         std::unique_lock lk(Settings::actorsMutex);
                         auto* o = find_by_id(Settings::actorOverrides, fid);
-                        if (!o)
-                            Settings::actorOverrides.push_back({"", fid, 1.0f, bothEn, 0x0F});
-                        else
+                        if (auto* o = find_by_id(Settings::actorOverrides, fid)) {
                             o->enabled = bothEn;
+                        }
                         auto* t = find_by_id(Settings::trackedActors, fid);
                         if (!t)
                             Settings::trackedActors.push_back({"", fid, 1.0f, bothEn, 0x0F});
@@ -687,8 +677,8 @@ void __stdcall UI::WetConfig::RenderNPCs() {
                     SWE::WetController::GetSingleton()->RefreshNow();
                 }
 
-                ImGui::TableSetColumnIndex(5);
-                if (ImGui::SmallButton("Remove")) {
+                ImGui::TableSetColumnIndex(4);
+                if (ImGui::SmallButton("X")) {
                     {
                         std::unique_lock lk(Settings::actorsMutex);
                         remove_from(Settings::actorOverrides, fid);

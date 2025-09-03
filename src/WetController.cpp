@@ -667,11 +667,29 @@ namespace SWE {
         const auto overridesSnap = Settings::SnapshotActorOverrides();
         const auto trackedSnap = Settings::SnapshotTrackedActors();
 
+        std::unordered_set<std::uint32_t> allow;
+        const bool optIn = Settings::npcOptInOnly.load();
+        std::unordered_set<std::uint32_t> allowIDs;
+        if (optIn) {
+            for (const auto& fs : trackedSnap)
+                if (fs.enabled && fs.id) allowIDs.insert(fs.id);
+            for (const auto& fs : overridesSnap)
+                if (fs.enabled && fs.id) allowIDs.insert(fs.id);
+        }
+
+        auto isAllowed = [&](RE::Actor* a) -> bool {
+            if (!optIn || !a) return true;
+            const std::uint32_t refID = a->GetFormID();
+            const std::uint32_t baseID = (a->GetActorBase() ? a->GetActorBase()->GetFormID() : 0);
+            return allowIDs.count(refID) || allowIDs.count(baseID);
+        };
+
         RE::Actor* player = RE::PlayerCharacter::GetSingleton();
         if (player) UpdateActorWetness(player, dt, overridesSnap);
 
         if (Settings::affectNPCs.load()) {
             if (auto* proc = RE::ProcessLists::GetSingleton()) {
+
                 std::unordered_set<std::uint32_t> allow;
                 const bool optIn = Settings::npcOptInOnly.load();
                 if (optIn) {
@@ -690,22 +708,6 @@ namespace SWE {
                     RE::Actor* a = ap.get();
                     if (!a || a == player) continue;
 
-                    if (optIn) {
-                        std::uint32_t baseID = 0;
-                        if (auto* ab = a->GetActorBase()) baseID = ab->GetFormID();
-                        if (allow.find(baseID) == allow.end()) {
-                            auto it = _wet.find(a->GetFormID());
-                            if (it != _wet.end() &&
-                                (it->second.lastAppliedWet > 0.0005f || it->second.wetness > 0.0005f)) {
-                                const float zeros[4]{0, 0, 0, 0};
-                                ApplyWetnessMaterials(a, zeros);
-                                it->second.wetness = 0.0f;
-                                it->second.lastAppliedWet = 0.0f;
-                            }
-                            continue;
-                        }
-                    }
-
                     if (useRad) {
                         const float d2 = a->GetPosition().GetSquaredDistance(pcPos);
                         if (d2 > radiusSq) {
@@ -721,25 +723,37 @@ namespace SWE {
                         }
                     }
 
-                    UpdateActorWetness(a, dt, overridesSnap);
+                    const bool allowEnvWet = isAllowed(a);
+                    if (!allowEnvWet) {
+                        if (auto it = _wet.find(a->GetFormID());
+                            it != _wet.end() && (it->second.lastAppliedWet > 0.0005f || it->second.wetness > 0.0005f)) {
+                            const float zeros[4]{0, 0, 0, 0};
+                            ApplyWetnessMaterials(a, zeros);
+                            it->second.wetness = 0.0f;
+                            it->second.lastAppliedWet = 0.0f;
+                        }
+                        continue;
+                    }
+
+                    
+                    UpdateActorWetness(a, dt, overridesSnap, true);
                 }
             }
         }
     }
 
-    void WetController::UpdateActorWetness(RE::Actor* a, float dt, const std::vector<Settings::FormSpec>& overrides) {
+    void WetController::UpdateActorWetness(RE::Actor* a, float dt, const std::vector<Settings::FormSpec>& overrides, bool allowEnvWet) {
         if (!a) return;
 
         auto getOverride = [&](float& outW, std::uint8_t& outMask) -> bool {
-            if (auto* ab = a->GetActorBase()) {
-                const std::uint32_t fid = ab->GetFormID();
-                for (const auto& fs : overrides) {
-                    if (!fs.enabled || fs.id == 0) continue;
-                    if (fs.id == fid) {
-                        outW = clampf(fs.value, 0.0f, 1.0f);
-                        outMask = (fs.mask & 0x0F);
-                        return true;
-                    }
+            const std::uint32_t refID = a->GetFormID();
+            const std::uint32_t baseID = (a->GetActorBase() ? a->GetActorBase()->GetFormID() : 0);
+            for (const auto& fs : overrides) {
+                if (!fs.enabled || fs.id == 0) continue;
+                if (fs.id == refID || fs.id == baseID) {
+                    outW = clampf(fs.value, 0.f, 1.f);
+                    outMask = (fs.mask & 0x0F);
+                    return true;
                 }
             }
             return false;
@@ -748,8 +762,8 @@ namespace SWE {
         auto& wd = _wet[a->GetFormID()];
         wd.lastSeen = std::chrono::steady_clock::now();
 
-        const bool inWater = IsActorWetByWater(a);
-        const bool precipNow = Settings::rainSnowEnabled.load() && IsRainingOrSnowing();
+        const bool inWater = allowEnvWet && IsActorWetByWater(a);
+        const bool precipNow = allowEnvWet && Settings::rainSnowEnabled.load() && IsRainingOrSnowing();
 
         bool isInterior = false;
         if (auto* cell = a->GetParentCell()) {
@@ -787,7 +801,7 @@ namespace SWE {
         }
 
         bool nearWaterfall = false;
-        if (!inWater && Settings::waterfallEnabled.load()) {
+        if (allowEnvWet && !inWater && Settings::waterfallEnabled.load()) {
             const auto now = std::chrono::steady_clock::now();
             if (wd.lastWaterfallProbe.time_since_epoch().count() == 0 || (now - wd.lastWaterfallProbe) > 800ms) {
                 // const float r2 = Settings::nearWaterfallRadius.load() * Settings::nearWaterfallRadius.load();
@@ -890,7 +904,7 @@ namespace SWE {
 
         float w = wd.wetness;
 
-        const bool envDominates = inWater || nearWaterfall || inPrecipOnActor;
+        const bool envDominates = allowEnvWet && (inWater || nearWaterfall || inPrecipOnActor);
 
         if (inWater) {
             w += soakWaterRate * dt;
@@ -1568,10 +1582,10 @@ namespace SWE {
                     std::find_if(key.rbegin(), key.rend(), [](unsigned char c) { return !std::isspace(c); }).base(),
                     key.end());
 
+                ExternalSource src{};
+
                 float v = 0.f;
                 if (!read(&v, sizeof(v))) break;
-
-                ExternalSource src{};
                 src.value = clampf(v, 0.f, 1.f);
 
                 float expLike = -1.f;
@@ -1593,18 +1607,13 @@ namespace SWE {
                     src.expiryRemainingSec = expLike;
                 } else {
                     const float nowH = GetGameHours();
-                    if (expLike >= 0.f) {
+                    if (expLike >= 0.f)
                         src.expiryRemainingSec = std::max(0.f, (expLike - nowH) * 3600.f);
-                    } else {
+                    else
                         src.expiryRemainingSec = -1.f;
-                    }
                 }
 
                 if (version >= 3) {
-                    std::uint8_t mask = 0x0F;
-                    if (!read(&mask, sizeof(mask))) break;
-                    src.catMask = (mask & 0x0F) ? (mask & 0x0F) : 0x0F;
-
                     float ftmp;
                     if (!read(&ftmp, sizeof(float))) break;
                     src.ov.maxGloss = ftmp;
@@ -1621,7 +1630,6 @@ namespace SWE {
                     if (!read(&ftmp, sizeof(float))) break;
                     src.ov.skinHairMul = ftmp;
                 } else {
-                    src.catMask = 0x0F;
                     src.ov = {};
                 }
 
