@@ -326,7 +326,7 @@ void __stdcall UI::WetConfig::RenderMaterials() {
         }
         {
             float k = Settings::skinHairResponseMul.load();
-            if (FloatControl("Skin/Hair response × (gloss & spec)", k, 0.1f, 10.0f, "%.2f", 0.05f, 0.25f,
+            if (FloatControl("Skin/Hair response × (gloss & spec)", k, 0.1f, 100.0f, "%.1f", 0.5f, 1.0f,
                              "Extra multiplier applied to both glossiness and specular intensity on skin & hair.")) {
                 Settings::skinHairResponseMul.store(k);
             }
@@ -357,7 +357,7 @@ void __stdcall UI::WetConfig::RenderMaterials() {
                 Settings::maxSpecularStrength.store(smx);
                 Settings::minSpecularStrength.store(smn);
             }
-            if (FloatControl("Min Specular Strength", smn, 0.0f, 20.0f, "%.2f", 0.05f, 0.5f,
+            if (FloatControl("Min Specular Strength", smn, 0.0f, 100.0f, "%.2f", 0.05f, 0.5f,
                              "Below this it is considered non-specular.")) {
                 if (smn > Settings::maxSpecularStrength.load()) {
                     Settings::maxSpecularStrength.store(smn);

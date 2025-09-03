@@ -119,50 +119,42 @@ namespace SWE {
     }
     static bool LooksLikeWaterfall(RE::TESObjectREFR* r) {
         if (!r) return false;
-
         auto lc = [](std::string s) {
             std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return std::tolower(c); });
             return s;
         };
 
-        if (auto* base = r->GetBaseObject()) {
-#if defined(CLASSIC_CLIB_HAS_EDITORID) || defined(SKYRIM_AE) || defined(SKYRIM_SE)
-            if (const char* ed = base->GetFormEditorID(); ed && *ed) {
-                std::string e = lc(ed);
-                if (e.find("waterfall") != std::string::npos && e.find("splash") == std::string::npos &&
-                    e.find("foam") == std::string::npos)
-                    return true;
-            }
-#endif
+        auto* base = r->GetBaseObject();
+        if (!base) return false;
+        if (!skyrim_cast<RE::TESObjectSTAT*>(base) && !skyrim_cast<RE::BGSMovableStatic*>(base)) {
+            return false;
+        }
 
-            if (auto* tm = skyrim_cast<RE::TESModel*>(base)) {
-                if (const char* model = tm->GetModel(); model && model[0]) {
-                    std::string m = lc(model);
-                    const bool hasWF = (m.find("waterfall") != std::string::npos) ||
-                                       (m.find("fx\\waterfall") != std::string::npos) ||
-                                       (m.find("fx/waterfall") != std::string::npos);
-                    const bool isAux = (m.find("splash") != std::string::npos) ||
-                                       (m.find("ripple") != std::string::npos) || (m.find("foam") != std::string::npos);
-                    if (!hasWF && isAux) return false;
-                    if (hasWF) return true;
-                }
+        if (const char* ed = base->GetFormEditorID(); ed && *ed) {
+            std::string e = lc(ed);
+            const bool hasWF = e.find("waterfall") != std::string::npos;
+            const bool isAux = (e.find("splash") != std::string::npos) || (e.find("ripple") != std::string::npos) ||
+                               (e.find("foam") != std::string::npos) || (e.find("mist") != std::string::npos) ||
+                               (e.find("spray") != std::string::npos) || (e.find("droplet") != std::string::npos);
+            if (hasWF && !isAux) {
+                return true;
+            } else {
+                return false;
             }
         }
 
-        if (auto* root = r->Get3D()) {
-            const RE::NiAVObject* cur = root;
-            for (int i = 0; i < 4 && cur; ++i) {
-                if (NameHas(cur, "waterfall") || NameHas(cur, "falls")) return true;
-                cur = cur->parent;
+        if (auto* tm = skyrim_cast<RE::TESModel*>(base)) {
+            if (const char* model = tm->GetModel(); model && model[0]) {
+                std::string m = lc(model);
+                const bool hasWF = (m.find("waterfall") != std::string::npos) ||
+                                   (m.find("fx\\waterfall") != std::string::npos) ||
+                                   (m.find("fx/waterfall") != std::string::npos);
+                const bool isAux = (m.find("splash") != std::string::npos) || (m.find("ripple") != std::string::npos) ||
+                                   (m.find("foam") != std::string::npos) || (m.find("mist") != std::string::npos) ||
+                                   (m.find("spray") != std::string::npos) || (m.find("droplet") != std::string::npos);
+                if (hasWF && !isAux) return true;
             }
-            bool hit = false;
-            ForEachGeometry(root, [&](RE::BSGeometry* g) {
-                if (hit) return;
-                if (NameHas(g, "waterfall") || NameHas(g, "falls")) hit = true;
-            });
-            if (hit) return true;
         }
-
         return false;
     }
     static bool HasAuxKeywords(const RE::NiAVObject* root) {
