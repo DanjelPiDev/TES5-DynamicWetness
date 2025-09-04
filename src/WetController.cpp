@@ -1181,9 +1181,9 @@ namespace SWE {
             const bool isArmorOrWeap = (cat == MatCat::ArmorClothing || cat == MatCat::Weapon);
 
             const bool likelyPBR = MaterialLooksPBR(mat);
-            const bool csTruePBR = lsp && IsTruePBR_CS(lsp);
+            const bool csTruePBR = isArmorOrWeap && lsp && IsTruePBR_CS(lsp);
 
-            const bool pbrMode = Settings::pbrFriendlyMode.load() && (isArmorOrWeap || likelyPBR);
+            //const bool pbrMode = Settings::pbrFriendlyMode.load() && (isArmorOrWeap || likelyPBR);
             const bool pbrish = Settings::pbrFriendlyMode.load() && (likelyPBR || csTruePBR);
 
             if (wet <= 0.0005f) {
