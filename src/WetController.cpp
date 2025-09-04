@@ -83,6 +83,14 @@ namespace SWE {
         std::transform(t.begin(), t.end(), t.begin(), [](unsigned char c) { return std::tolower(c); });
         return n.find(t) != std::string::npos;
     }
+    static inline std::string lc_norm_path(const char* p) {
+        if (!p || !p[0]) return {};
+        std::string s(p);
+        std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+        std::replace(s.begin(), s.end(), '\\', '/');
+        s.erase(std::unique(s.begin(), s.end(), [](char a, char b) { return a == '/' && b == '/'; }), s.end());
+        return s;
+    }
     static bool HasAuxKeywords(const RE::NiAVObject* root) {
         if (!root) return false;
         auto hasAny = [](const RE::NiAVObject* o) {
@@ -100,6 +108,42 @@ namespace SWE {
             if (hasAny(g)) hit = true;
         });
         return hit;
+    }
+    static bool LooksLikeEyeName(const RE::NiAVObject* o) {
+        if (!o) return false;
+        const RE::NiAVObject* cur = o;
+        for (int i = 0; i < 4 && cur; ++i) {
+            if (NameHas(cur, "eyebrow") || NameHas(cur, "brow") || NameHas(cur, "eyelash") || NameHas(cur, "lash"))
+                return false;
+            if (NameHas(cur, "eye") || NameHas(cur, "eyes") || NameHas(cur, "eyeball") || NameHas(cur, "iris") ||
+                NameHas(cur, "pupil"))
+                return true;
+            cur = cur->parent;
+        }
+        return false;
+    }
+
+    static bool TexLooksLikeEye(RE::BSLightingShaderMaterialBase* mb) {
+        if (!mb || !mb->textureSet) return false;
+        auto hasEyes = [&](RE::BSTextureSet::Texture t) {
+            std::string p = lc_norm_path(mb->textureSet->GetTexturePath(t));
+            if (p.empty()) return false;
+            if (p.find("brow") != std::string::npos || p.find("lash") != std::string::npos) return false;
+            return p.find("/eyes/") != std::string::npos || p.find("_eye") != std::string::npos ||
+                   p.find("eyes") != std::string::npos;
+        };
+        return hasEyes(RE::BSTextureSet::Texture::kDiffuse) || hasEyes(RE::BSTextureSet::Texture::kNormal);
+    }
+
+    static bool IsEyeGeometry(RE::BSGeometry* g, RE::BSLightingShaderProperty* lsp) {
+        if (!g) return false;
+        if (LooksLikeEyeName(g)) return true;
+        if (lsp && lsp->material) {
+            if (auto* mb = static_cast<RE::BSLightingShaderMaterialBase*>(lsp->material)) {
+                if (TexLooksLikeEye(mb)) return true;
+            }
+        }
+        return false;
     }
     static bool LooksLikeHeatSource(const RE::TESObjectREFR* r) {
         if (!r) return false;
@@ -275,15 +319,7 @@ namespace SWE {
         }
         return false;
     }
-    static inline std::string lc_norm_path(const char* p) {
-        if (!p || !p[0]) return {};
-        std::string s(p);
-        std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return (char)std::tolower(c); });
-        std::replace(s.begin(), s.end(), '\\', '/');
-        s.erase(std::unique(s.begin(), s.end(), [](char a, char b) { return a == '/' && b == '/'; }), s.end());
-        return s;
-    }
-
+    
     static inline std::string_view filename_no_ext(std::string_view path) {
         const size_t slash = path.find_last_of('/');
         std::string_view file = (slash == std::string::npos) ? path : path.substr(slash + 1);
@@ -1069,6 +1105,27 @@ namespace SWE {
         auto touchGeom = [&](RE::BSGeometry* g) {
             auto* lsp = FindLightingProp(g);
             if (!lsp) return;
+
+            if (IsEyeGeometry(g, lsp)) {
+                auto it = _matCache.find(lsp);
+                if (it != _matCache.end()) {
+                    auto* mat = static_cast<RE::BSLightingShaderMaterialBase*>(lsp->material);
+                    auto* sp = static_cast<RE::BSShaderProperty*>(lsp);
+                    const MatSnapshot& base = it->second;
+                    if (mat && sp) {
+                        SetSpecularEnabled(sp, base.hadSpecular);
+                        mat->materialAlpha = base.baseAlpha;
+                        mat->specularPower = base.baseSpecularPower;
+                        mat->specularColorScale = base.baseSpecularScale;
+                        mat->specularColor = {base.baseSpecR, base.baseSpecG, base.baseSpecB};
+                        sp->SetMaterial(mat, true);
+                        lsp->DoClearRenderPasses();
+                        (void)lsp->SetupGeometry(g);
+                        (void)lsp->FinishSetupGeometry(g);
+                    }
+                }
+                return;  // Nichts auf Augen anwenden
+            }
 
             const MatCat cat = ClassifyGeom(g, lsp);
             const bool toggledOff = (cat == MatCat::SkinFace && !Settings::affectSkin.load()) ||
