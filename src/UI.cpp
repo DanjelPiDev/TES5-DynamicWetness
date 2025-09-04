@@ -512,7 +512,7 @@ void __stdcall UI::WetConfig::RenderMaterials() {
         }
         {
             float fm = Settings::dryMultiplierNearFire.load();
-            if (FloatControl("Drying speed × near fire", fm, 1.0f, 10.0f, "%.2f", 0.1f, 0.5f,
+            if (FloatControl("Drying speed × near fire", fm, 1.0f, 100.0f, "%.2f", 0.1f, 0.5f,
                              "Multiplier for drying near fire.")) {
                 Settings::dryMultiplierNearFire.store(fm);
             }
