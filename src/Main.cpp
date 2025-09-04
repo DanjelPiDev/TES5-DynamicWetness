@@ -58,6 +58,19 @@ static void SetupLog() {
 BOOL APIENTRY DllMain(HMODULE, DWORD, LPVOID) { return TRUE; }
 
 extern "C" {
+    __declspec(dllexport) float SWE_GetFinalWetness(RE::Actor* a) {
+        if (auto* wc = SWE::WetController::GetSingleton()) return wc->GetFinalWetnessForActor(a);
+        return 0.0f;
+    }
+    __declspec(dllexport) float SWE_GetExternalWetness(RE::Actor* a, const char* key) {
+        if (!a || !key) return 0.0f;
+        if (auto* wc = SWE::WetController::GetSingleton()) return wc->GetExternalWetness(a, key);
+        return 0.0f;
+    }
+    __declspec(dllexport) float SWE_GetBaseWetness(RE::Actor* a) {
+        if (auto* wc = SWE::WetController::GetSingleton()) return wc->GetBaseWetnessForActor(a);
+        return 0.0f;
+    }
     __declspec(dllexport) void SWE_SetExternalWetness(RE::Actor* a, const char* key, float value, float durationSec) {
         if (!a || !key) return;
         SWE::WetController::GetSingleton()->SetExternalWetness(a, key, value, durationSec);

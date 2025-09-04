@@ -28,6 +28,7 @@ namespace SWE {
 
         void RefreshNow();
         float GetPlayerWetness() const;
+        float GetBaseWetnessForActor(RE::Actor* a);
         void SetPlayerWetnessSnapshot(float w);
 
         void SetExternalWetness(RE::Actor* a, std::string key, float value, float durationSec = -1.f);
@@ -80,6 +81,7 @@ namespace SWE {
         struct WetData {
             float wetness{0.f};  // 0...1
             float lastAppliedWet{-1.f};
+            float baseWetness{0.f};
             std::chrono::steady_clock::time_point lastSeen;
             std::chrono::steady_clock::time_point lastRoofProbe{};
             bool lastRoofCovered{false};
