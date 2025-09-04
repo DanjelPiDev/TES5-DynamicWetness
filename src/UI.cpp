@@ -1,5 +1,7 @@
 ﻿#include "UI.h"
 
+#include "utils/Utils.h"
+
 #ifndef IM_ARRAYSIZE
     #define IM_ARRAYSIZE(_ARR) ((int)(sizeof(_ARR) / sizeof(*(_ARR))))
 #endif
@@ -21,6 +23,32 @@ namespace {
             ImGui::EndTooltip();
         }
     }
+    static void SubHeader(const char* label) {
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::TextColored(ImVec4(0.85f, 0.92f, 1.0f, 1.0f), "%s", label);
+    }
+    static void BadgeBoolFA(std::uint32_t iconOn, const char* textOn, std::uint32_t iconOff, const char* textOff,
+                            bool on) {
+        const ImVec4 c = on ? ImVec4(0.38f, 0.84f, 0.52f, 1.0f) : ImVec4(0.60f, 0.60f, 0.60f, 1.0f);
+
+        const std::string icon = FontAwesome::UnicodeToUtf8(on ? iconOn : iconOff);
+        const char* labelText = on ? textOn : textOff;
+
+        ImGui::SameLine(0, 8);
+        FontAwesome::PushSolid();
+        ImGui::TextColored(c, "%s %s", icon.c_str(), labelText);
+        FontAwesome::Pop();
+    }
+    static void BadgeBool(const char* onLabel, const char* offLabel, bool on) {
+        ImVec4 c = on ? ImVec4(0.38f, 0.84f, 0.52f, 1.0f) : ImVec4(0.6f, 0.6f, 0.6f, 1.0f);
+        ImGui::SameLine(0, 8);
+        ImGui::TextColored(c, "%s", on ? onLabel : offLabel);
+    }
+    static void BadgeBool(const char8_t* onLabel, const char8_t* offLabel, bool on) {
+        BadgeBool(reinterpret_cast<const char*>(onLabel), reinterpret_cast<const char*>(offLabel), on);
+    }
+
     static float DefaultInputWidthForFormat(const char* fmt) {
         const char* sample = (strstr(fmt, ".2f") || strstr(fmt, "%.2f"))   ? "-00000.00"
                              : (strstr(fmt, ".1f") || strstr(fmt, "%.1f")) ? "-00000.0"
@@ -141,7 +169,7 @@ namespace {
         return changed;
     }
 
-    void SaveResetRow(bool showReapply = false) {
+    static void SaveResetRow(bool showReapply = false) {
         FontAwesome::PushSolid();
         if (ImGui::Button(UI::WetConfig::saveIcon.c_str())) {
             Settings::SaveToJson(Settings::DefaultPath());
@@ -159,6 +187,51 @@ namespace {
         }
         FontAwesome::Pop();
     }
+
+    static void ApplyPreset_Subtle() {
+        Settings::glossinessBoost.store(60.0f);
+        Settings::specularScaleBoost.store(3.0f);
+        Settings::skinHairResponseMul.store(2.0f);
+        Settings::maxGlossiness.store(400.0f);
+        Settings::maxSpecularStrength.store(5.0f);
+        Settings::secondsToSoakRain.store(60.0f);
+        Settings::secondsToDry.store(45.0f);
+        Settings::pbrFriendlyMode.store(true);
+        Settings::pbrArmorWeapMul.store(0.35f);
+        Settings::pbrMaxGlossArmor.store(260.0f);
+        Settings::pbrMaxSpecArmor.store(4.0f);
+    }
+    static void ApplyPreset_Balanced() {
+        Settings::glossinessBoost.store(120.0f);
+        Settings::specularScaleBoost.store(8.0f);
+        Settings::skinHairResponseMul.store(5.0f);
+        Settings::maxGlossiness.store(800.0f);
+        Settings::maxSpecularStrength.store(10.0f);
+        Settings::secondsToSoakRain.store(36.0f);
+        Settings::secondsToDry.store(40.0f);
+        Settings::pbrFriendlyMode.store(false);
+        Settings::pbrArmorWeapMul.store(0.5f);
+        Settings::pbrMaxGlossArmor.store(300.0f);
+        Settings::pbrMaxSpecArmor.store(5.0f);
+    }
+    static void ApplyPreset_GlossyENB() {
+        Settings::glossinessBoost.store(200.0f);
+        Settings::specularScaleBoost.store(10.0f);
+        Settings::skinHairResponseMul.store(6.0f);
+        Settings::maxGlossiness.store(1200.0f);
+        Settings::maxSpecularStrength.store(15.0f);
+        Settings::pbrFriendlyMode.store(false);
+    }
+    static void ApplyPreset_PBRFriendly() {
+        Settings::pbrFriendlyMode.store(true);
+        Settings::pbrArmorWeapMul.store(0.5f);
+        Settings::pbrMaxGlossArmor.store(300.0f);
+        Settings::pbrMaxSpecArmor.store(5.0f);
+
+        Settings::specularScaleBoost.store(std::min(6.0f, Settings::specularScaleBoost.load()));
+        Settings::glossinessBoost.store(std::min(120.0f, Settings::glossinessBoost.load()));
+    }
+
 }
 
 void UI::ResetRegistration() { g_registered.store(false); }
@@ -177,6 +250,48 @@ void UI::Register() {
 }
 
 void __stdcall UI::WetConfig::RenderGeneral() {
+    if (ImGui::CollapsingHeader("Overview & Presets", ImGuiTreeNodeFlags_DefaultOpen)) {
+        SubHeader("Player Status");
+        if (auto* pc = RE::PlayerCharacter::GetSingleton()) {
+            const float wet = SWE::Util::GetFinalWetness(pc);  // 0..1
+            ImGui::Text("Wetness: %.0f%%", wet * 100.0f);
+            ImGui::ProgressBar(wet, ImVec2(-FLT_MIN, 0.0f), "Wetness");
+
+            auto env = SWE::Util::QueryEnvironment(pc);
+            ImGui::TextDisabled("Environment:");
+            BadgeBoolFA(0xf773, "In Water", 0xf773, "Not in Water", env.inWater);
+            BadgeBoolFA(0xf740, "Wet Weather", 0xf740, "Dry Weather", env.wetWeather);
+            BadgeBoolFA(0xf6d9, "Under Roof", 0xf6d9, "Open Sky", env.underRoof);
+            BadgeBoolFA(0xf06d, "Near Heat", 0xf06d, "No Heat", env.nearHeat);
+            BadgeBoolFA(0xf185, "Exterior", 0xf015, "Interior", env.exteriorOpen);
+        } else {
+            ImGui::TextDisabled("Player not available.");
+        }
+
+        // Presets
+        SubHeader("Quick Presets");
+        ImGui::TextDisabled("Click to apply a curated set of values. You can still tweak everything below.");
+        if (ImGui::Button("Subtle")) {
+            ApplyPreset_Subtle();
+            SWE::WetController::GetSingleton()->RefreshNow();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Balanced")) {
+            ApplyPreset_Balanced();
+            SWE::WetController::GetSingleton()->RefreshNow();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Glossy ENB")) {
+            ApplyPreset_GlossyENB();
+            SWE::WetController::GetSingleton()->RefreshNow();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("PBR-friendly")) {
+            ApplyPreset_PBRFriendly();
+            SWE::WetController::GetSingleton()->RefreshNow();
+        }
+    }
+
     FontAwesome::PushSolid();
     if (ImGui::CollapsingHeader(generalHeader.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
         bool en = Settings::modEnabled.load();
@@ -190,20 +305,23 @@ void __stdcall UI::WetConfig::RenderGeneral() {
     }
     FontAwesome::Pop();
 
-    if (ImGui::CollapsingHeader("External Wetness (API)")) {
+    if (ImGui::CollapsingHeader("Integration (API)")) {
         int mode = Settings::externalBlendMode.load();
-        if (ImGui::RadioButton("Max", mode == 0)) mode = 0;
+        ImGui::Text("External Wetness Blend");
+        ImGui::RadioButton("Max", &mode, 0);
         ImGui::SameLine();
-        if (ImGui::RadioButton("Additive (cap 1.0)", mode == 1)) mode = 1;
+        ImGui::RadioButton("Additive (cap 1.0)", &mode, 1);
         ImGui::SameLine();
-        if (ImGui::RadioButton("Max + weighted rest", mode == 2)) mode = 2;
+        ImGui::RadioButton("Max + weighted rest", &mode, 2);
         Settings::externalBlendMode.store(mode);
 
         if (mode == 2) {
             float w = Settings::externalAddWeight.load();
-            if (FloatControl("Rest weight", w, 0.f, 1.f, "%.2f")) Settings::externalAddWeight.store(w);
+            if (FloatControl("Rest weight", w, 0.f, 1.f, "%.2f", 0.01f, 0.05f,
+                             "Weight for the non-maximum external contributions when using 'Max + weighted rest'")) {
+                Settings::externalAddWeight.store(w);
+            }
         }
-        ImGui::TextDisabled("Other mods can call SWE.SetExternalWetness(actor, key, value[, durationSec]).");
     }
 
     ImGui::Separator();
@@ -213,9 +331,10 @@ void __stdcall UI::WetConfig::RenderGeneral() {
 void __stdcall UI::WetConfig::RenderSources() {
     FontAwesome::PushSolid();
     if (ImGui::CollapsingHeader(sourcesHeader.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+        // Precipitation
+        SubHeader("Precipitation");
         bool rs = Settings::rainSnowEnabled.load();
         if (ImGui::Checkbox("Enable rain/snow wetting", &rs)) Settings::rainSnowEnabled.store(rs);
-
         bool snow = Settings::affectInSnow.load();
         if (ImGui::Checkbox("Affect in snow", &snow)) Settings::affectInSnow.store(snow);
 
@@ -223,12 +342,12 @@ void __stdcall UI::WetConfig::RenderSources() {
         if (ImGui::Checkbox("Ignore interiors", &ig)) Settings::ignoreInterior.store(ig);
         HelpMarker("If enabled, interiors disregard rain/snow.");
 
-        ImGui::Separator();
-
+        // Timings
+        SubHeader("Timings");
         {
             float w = Settings::secondsToSoakWater.load();
             if (FloatControl("Seconds to fully soak (Water)", w, 0.5f, 120.0f, "%.0f", 1.0f, 5.0f,
-                             "How fast you get 0% → 100% wet while in water.")) {
+                             "Time from 0% -> 100% wetness while in water.")) {
                 Settings::secondsToSoakWater.store(w);
             }
         }
@@ -242,17 +361,16 @@ void __stdcall UI::WetConfig::RenderSources() {
         {
             float d = Settings::secondsToDry.load();
             if (FloatControl("Seconds to dry", d, 2.0f, 3600.0f, "%.0f", 5.0f, 30.0f,
-                             "Time from 100% → 0% wetness (without fire/heat boost).")) {
+                             "Time from 100% -> 0% wetness (without fire/heat boost).")) {
                 Settings::secondsToDry.store(d);
             }
         }
 
-        ImGui::Separator();
-
+        // Waterfalls
+        SubHeader("Waterfalls");
         if (Settings::waterfallEnabled.load()) {
             ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.6f, 1.0f),
-                               "Waterfall wetting is bugged, disable it to avoid strange wet effects.");
-            ImGui::Separator();
+                               "Waterfall wetting is experimental. Disable if you see odd effects.");
         }
         {
             bool wf = Settings::waterfallEnabled.load();
@@ -261,7 +379,7 @@ void __stdcall UI::WetConfig::RenderSources() {
         {
             float r = Settings::secondsToSoakWaterfall.load();
             if (FloatControl("Seconds to fully soak (Waterfall spray)", r, 1.0f, 3600.0f, "%.0f", 1.0f, 5.0f,
-                             "Time to reach 100% wetness when standing in/near a waterfall.")) {
+                             "Time to reach 100% wetness when inside waterfall FX volume.")) {
                 Settings::secondsToSoakWaterfall.store(r);
             }
         }
@@ -286,10 +404,10 @@ void __stdcall UI::WetConfig::RenderSources() {
             if (FloatControl("Height pad (Z)", pz, 0.f, 400.f, "%.0f")) Settings::waterfallZPad.store(pz);
         }
 
-        ImGui::Separator();
+        // Threshold
+        SubHeader("Water Depth Threshold");
         {
             float ms = Settings::minSubmergeToSoak.load();
-
             if (FloatControl("Min water depth to start soaking (0..1)", ms, 0.0f, 0.8f, "%.2f", 0.01f, 0.05f,
                              "Relative depth at which water starts soaking you.")) {
                 Settings::minSubmergeToSoak.store(ms);
@@ -307,16 +425,27 @@ void __stdcall UI::WetConfig::RenderSources() {
 void __stdcall UI::WetConfig::RenderMaterials() {
     FontAwesome::PushSolid();
     if (ImGui::CollapsingHeader(materialsHeader.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+        SubHeader("Categories Affected");
         bool s = Settings::affectSkin.load();
-        if (ImGui::Checkbox("Affect Skin/Face", &s)) Settings::affectSkin.store(s);
         bool h = Settings::affectHair.load();
-        if (ImGui::Checkbox("Affect Hair", &h)) Settings::affectHair.store(h);
         bool a = Settings::affectArmor.load();
-        if (ImGui::Checkbox("Affect Armor", &a)) Settings::affectArmor.store(a);
         bool w = Settings::affectWeapons.load();
-        if (ImGui::Checkbox("Affect Weapons", &w)) Settings::affectWeapons.store(w);
 
-        ImGui::Separator();
+        // compact row
+        ImGui::Checkbox("Skin/Face", &s);
+        ImGui::SameLine();
+        ImGui::Checkbox("Hair", &h);
+        ImGui::SameLine();
+        ImGui::Checkbox("Armor", &a);
+        ImGui::SameLine();
+        ImGui::Checkbox("Weapons", &w);
+
+        if (s != Settings::affectSkin.load()) Settings::affectSkin.store(s);
+        if (h != Settings::affectHair.load()) Settings::affectHair.store(h);
+        if (a != Settings::affectArmor.load()) Settings::affectArmor.store(a);
+        if (w != Settings::affectWeapons.load()) Settings::affectWeapons.store(w);
+
+        SubHeader("Response & Limits");
         {
             float gb = Settings::glossinessBoost.load();
             if (FloatControl("Glossiness Boost (at 100% wet)", gb, 0.0f, 10000.0f, "%.0f", 5.0f, 50.0f,
@@ -334,7 +463,7 @@ void __stdcall UI::WetConfig::RenderMaterials() {
         {
             float k = Settings::skinHairResponseMul.load();
             if (FloatControl("Skin/Hair response × (gloss & spec)", k, 0.1f, 100.0f, "%.1f", 0.5f, 1.0f,
-                             "Extra multiplier applied to both glossiness and specular intensity on skin & hair.")) {
+                             "Extra multiplier on skin & hair only (keeps armor/weapons unchanged).")) {
                 Settings::skinHairResponseMul.store(k);
             }
         }
@@ -348,7 +477,7 @@ void __stdcall UI::WetConfig::RenderMaterials() {
                 Settings::minGlossiness.store(gmn);
             }
             if (FloatControl("Min Glossiness", gmn, 0.0f, 300.0f, "%.1f", 0.5f, 5.0f,
-                             "Below this it is considered non-glossy (depends on material)")) {
+                             "Below this it is considered non-glossy (depends on material).")) {
                 if (gmn > Settings::maxGlossiness.load()) {
                     Settings::maxGlossiness.store(gmn);
                 }
@@ -373,7 +502,7 @@ void __stdcall UI::WetConfig::RenderMaterials() {
             }
         }
 
-        ImGui::Separator();
+        SubHeader("Drying Boost Near Heat");
         {
             float fr = Settings::nearFireRadius.load();
             if (FloatControl("Fireplace radius (units)", fr, 100.0f, 2000.0f, "%.0f", 10.0f, 50.0f,
@@ -389,16 +518,15 @@ void __stdcall UI::WetConfig::RenderMaterials() {
             }
         }
 
-        ImGui::Separator();
-
+        // PBR area
+        SubHeader("PBR (Armor/Weapons)");
         {
             bool pbr = Settings::pbrFriendlyMode.load();
             if (ImGui::Checkbox("PBR-friendly for Armor/Weapons", &pbr)) Settings::pbrFriendlyMode.store(pbr);
             ImGui::SameLine();
             ImGui::TextDisabled("(Community Shaders PBR / roughness-metalness)");
-
             if (pbr) {
-                ImGui::TextDisabled("Use milder caps on Armor/Weapons and do not force specular on likely PBR sets.");
+                ImGui::TextDisabled("Use milder caps on Armor/Weapons and avoid forcing spec on likely PBR sets.");
                 float mul = Settings::pbrArmorWeapMul.load();
                 if (FloatControl("Armor/Weapons response × (PBR)", mul, 0.0f, 1.0f, "%.2f", 0.01f, 0.1f,
                                  "Scales gloss/spec boosts for armor/weapons when PBR mode is enabled.")) {
@@ -418,7 +546,6 @@ void __stdcall UI::WetConfig::RenderMaterials() {
                         Settings::pbrMaxSpecArmor.store(smx);
                     }
                 }
-                ImGui::Separator();
             }
         }
 
@@ -430,6 +557,7 @@ void __stdcall UI::WetConfig::RenderMaterials() {
 void __stdcall UI::WetConfig::RenderNPCs() {
     FontAwesome::PushSolid();
     if (ImGui::CollapsingHeader(npcsHeader.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+        // Top toggles
         bool en = Settings::affectNPCs.load();
         if (ImGui::Checkbox("Affect NPCs", &en)) Settings::affectNPCs.store(en);
 
@@ -447,6 +575,7 @@ void __stdcall UI::WetConfig::RenderNPCs() {
 
         ImGui::Separator();
 
+        // Helpers to edit lists
         auto find_by_id = [](std::vector<Settings::FormSpec>& v, std::uint32_t fid) -> Settings::FormSpec* {
             auto it = std::find_if(v.begin(), v.end(), [&](const Settings::FormSpec& fs) { return fs.id == fid; });
             return (it == v.end()) ? nullptr : &(*it);
@@ -461,10 +590,8 @@ void __stdcall UI::WetConfig::RenderNPCs() {
                     v.end());
         };
 
-
-
+        // ----- Add NPCs toolbar -----
         if (ImGui::TreeNodeEx("Add NPCs", ImGuiTreeNodeFlags_DefaultOpen)) {
-            // Nearby picker
             if (ImGui::Button("Add nearby NPCs…")) ImGui::OpenPopup("swe_add_npc_nearby_unified");
             if (ImGui::BeginPopup("swe_add_npc_nearby_unified")) {
                 static char filterN[48] = "";
@@ -474,8 +601,7 @@ void __stdcall UI::WetConfig::RenderNPCs() {
                     RE::Actor* pc = RE::PlayerCharacter::GetSingleton();
                     ImGui::BeginChild("near_list", ImVec2(0, 240), true);
                     for (auto& h : proc->highActorHandles) {
-                        RE::NiPointer<RE::Actor> ap = h.get();
-                        RE::Actor* a = ap.get();
+                        RE::Actor* a = h.get().get();
                         if (!a || a == pc) continue;
                         auto* ab = a->GetActorBase();
                         if (!ab) continue;
@@ -544,8 +670,7 @@ void __stdcall UI::WetConfig::RenderNPCs() {
                         RE::Actor* pc = RE::PlayerCharacter::GetSingleton();
                         ImGui::BeginChild("by_name", ImVec2(0, 240), true);
                         for (auto& h : proc->highActorHandles) {
-                            RE::NiPointer<RE::Actor> ap = h.get();
-                            RE::Actor* a = ap.get();
+                            RE::Actor* a = h.get().get();
                             if (!a || a == pc) continue;
                             auto* ab = a->GetActorBase();
                             if (!ab) continue;
@@ -576,10 +701,30 @@ void __stdcall UI::WetConfig::RenderNPCs() {
                     ImGui::EndPopup();
                 }
             }
+
+            // Clear All
+            ImGui::SameLine();
+            if (ImGui::Button("Clear all…")) ImGui::OpenPopup("swe_clear_all_lists");
+            if (ImGui::BeginPopupModal("swe_clear_all_lists", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+                ImGui::TextWrapped("This will remove all tracked actors and manual overrides. Continue?");
+                if (ImGui::Button("Yes, clear")) {
+                    {
+                        std::unique_lock lk(Settings::actorsMutex);
+                        Settings::actorOverrides.clear();
+                        Settings::trackedActors.clear();
+                    }
+                    SWE::WetController::GetSingleton()->RefreshNow();
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+                ImGui::EndPopup();
+            }
+
             ImGui::TreePop();
         }
 
-        // Table: Render from Snapshots, commits are locked
+        // Snapshots
         auto trackedSnap = Settings::SnapshotTrackedActors();
         auto overridesSnap = Settings::SnapshotActorOverrides();
 
@@ -590,7 +735,13 @@ void __stdcall UI::WetConfig::RenderNPCs() {
         for (const auto& fs : overridesSnap)
             if (std::find(ids.begin(), ids.end(), fs.id) == ids.end()) ids.push_back(fs.id);
 
-        if (ImGui::BeginTable("npc_mgr_tbl", 6, ImGuiTableFlags_Resizable | ImGuiTableFlags_Borders)) {
+        // Filter bar for the table
+        static char tblFilter[64] = "";
+        ImGui::SetNextItemWidth(240);
+        ImGui::InputTextWithHint("##tblFilter", "Filter table by name…", tblFilter, IM_ARRAYSIZE(tblFilter));
+
+        if (ImGui::BeginTable("npc_mgr_tbl", 6,
+                              ImGuiTableFlags_Resizable | ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
             ImGui::TableSetupColumn("Actor");
             ImGui::TableSetupColumn("Mode");
             ImGui::TableSetupColumn("Wetness (0..1)");
@@ -604,14 +755,24 @@ void __stdcall UI::WetConfig::RenderNPCs() {
                 const Settings::FormSpec* trkS = find_by_id_const(trackedSnap, fid);
                 const Settings::FormSpec* ovrS = find_by_id_const(overridesSnap, fid);
 
+                // Actor Name
+                const char* nm = "";
+                if (auto* npc = RE::TESForm::LookupByID<RE::TESNPC>(fid)) nm = npc->GetName();
+                std::string disp = nm && nm[0] ? nm : "(unknown)";
+
+                // Table filter
+                if (tblFilter[0]) {
+                    std::string lowN = disp, lowF = tblFilter;
+                    std::transform(lowN.begin(), lowN.end(), lowN.begin(), ::tolower);
+                    std::transform(lowF.begin(), lowF.end(), lowF.begin(), ::tolower);
+                    if (lowN.find(lowF) == std::string::npos) continue;
+                }
+
                 ImGui::PushID(static_cast<int>(fid));
                 ImGui::TableNextRow();
 
-                // Actor Name
                 ImGui::TableSetColumnIndex(0);
-                const char* nm = "";
-                if (auto* npc = RE::TESForm::LookupByID<RE::TESNPC>(fid)) nm = npc->GetName();
-                ImGui::TextUnformatted(nm && nm[0] ? nm : "(unknown)");
+                ImGui::TextUnformatted(disp.c_str());
 
                 ImGui::TableSetColumnIndex(1);
                 bool autoWet = trkS ? trkS->autoWet : true;
@@ -638,7 +799,7 @@ void __stdcall UI::WetConfig::RenderNPCs() {
 
                 const bool manual = !autoWet;
 
-                // Wetness Slider (Override-Commit)
+                // Wetness Slider (Manual only)
                 ImGui::TableSetColumnIndex(2);
                 float v = ovrS ? ovrS->value : 1.0f;
                 if (!manual) ImGui::BeginDisabled();
@@ -692,12 +853,12 @@ void __stdcall UI::WetConfig::RenderNPCs() {
                     SWE::WetController::GetSingleton()->RefreshNow();
                 }
 
+                // Enabled
                 ImGui::TableSetColumnIndex(4);
                 bool bothEn = ((ovrS && ovrS->enabled) || (trkS && trkS->enabled));
                 if (ImGui::Checkbox("##en", &bothEn)) {
                     {
                         std::unique_lock lk(Settings::actorsMutex);
-                        auto* o = find_by_id(Settings::actorOverrides, fid);
                         if (auto* o = find_by_id(Settings::actorOverrides, fid)) {
                             o->enabled = bothEn;
                         }
@@ -710,6 +871,7 @@ void __stdcall UI::WetConfig::RenderNPCs() {
                     SWE::WetController::GetSingleton()->RefreshNow();
                 }
 
+                // Remove
                 ImGui::TableSetColumnIndex(5);
                 if (ImGui::SmallButton("X")) {
                     {
