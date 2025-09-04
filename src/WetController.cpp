@@ -1124,7 +1124,7 @@ namespace SWE {
                         (void)lsp->FinishSetupGeometry(g);
                     }
                 }
-                return;  // Nichts auf Augen anwenden
+                return;
             }
 
             const MatCat cat = ClassifyGeom(g, lsp);
