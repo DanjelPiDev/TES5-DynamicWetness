@@ -1391,7 +1391,7 @@ namespace SWE {
         const RE::NiPoint3 base = a->GetPosition();
         const float headZ = ActorHeadZ(a) + 5.0f;
         constexpr float toAbove = 4000.0f;
-        constexpr float off = 60.0f;
+        constexpr float off = 10.0f;
 
 #if SWE_ROOF_SAMPLES == 9
         const RE::NiPoint3 starts[] = {
