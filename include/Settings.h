@@ -7,13 +7,17 @@ namespace Settings {
 
     struct FormSpec {
         std::string plugin;
-        uint32_t id{0};
+        std::uint32_t id{0};
         float value{0.f};
+        bool enabled{true};
+        std::uint8_t mask{0x0F};
+        bool autoWet{true};
     };
 
     extern std::atomic<bool> modEnabled;
     extern std::atomic<bool> affectNPCs;
     extern std::atomic<int> npcRadius;
+    extern std::atomic<bool> npcOptInOnly;
 
     extern std::atomic<bool> rainSnowEnabled;
     extern std::atomic<bool> affectInSnow;
@@ -52,6 +56,17 @@ namespace Settings {
     extern std::atomic<float> externalAddWeight;
 
     extern std::atomic<int> updateIntervalMs;
+
+    extern std::atomic<bool> pbrFriendlyMode;
+    extern std::atomic<float> pbrArmorWeapMul;
+    extern std::atomic<float> pbrMaxGlossArmor;
+    extern std::atomic<float> pbrMaxSpecArmor;
+
+    extern std::vector<FormSpec> actorOverrides;
+    extern std::vector<FormSpec> trackedActors;
+    extern std::shared_mutex actorsMutex;
+    std::vector<FormSpec> SnapshotTrackedActors();
+    std::vector<FormSpec> SnapshotActorOverrides();
 
     std::string DefaultPath();
 

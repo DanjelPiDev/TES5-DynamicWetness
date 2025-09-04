@@ -2,6 +2,8 @@
 #include <chrono>
 #include <unordered_map>
 
+#include "Settings.h"
+
 #include "RE/Skyrim.h"
 #include "SKSE/SKSE.h"
 
@@ -71,7 +73,7 @@ namespace SWE {
         struct ExternalSource {
             float value{0.f};             // 0...1
             float expiryRemainingSec = -1.f;
-            std::uint8_t catMask{0x0F};
+            std::uint8_t catMask{0};
             std::uint32_t flags = 0;  // behavior flags
             OverrideParams ov;
         };
@@ -102,7 +104,8 @@ namespace SWE {
 
         std::chrono::steady_clock::time_point _lastTick = std::chrono::steady_clock::now();
 
-        void UpdateActorWetness(RE::Actor* a, float dt);
+        void UpdateActorWetness(RE::Actor* a, float dt, const std::vector<Settings::FormSpec>& overrides,
+                                bool allowEnvWet = true, bool manualMode = false);
         void ApplyWetnessMaterials(RE::Actor* a, const float wetByCat[4]);
 
         bool IsRainingOrSnowing() const;
@@ -113,7 +116,7 @@ namespace SWE {
         bool RayHitsCover(const RE::NiPoint3& from, const RE::NiPoint3& to,
                           const RE::TESObjectREFR* ignoreRef = nullptr) const;
 
-        void ComputeWetByCategory(WetData& wd, float baseWet, float outWetByCat[4], float dt);
+        void ComputeWetByCategory(WetData& wd, float baseWet, float outWetByCat[4], float dt, bool envDominates);
         float GetGameHours() const;
 
         mutable std::recursive_mutex _mtx;
