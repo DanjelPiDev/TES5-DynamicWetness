@@ -356,6 +356,11 @@ namespace SWE {
         return false;
     }
 
+    // TruePBR sets kVertexLighting
+    static inline bool IsTruePBR_CS(const RE::BSLightingShaderProperty* lsp) {
+        if (!lsp) return false;
+        return lsp->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kVertexLighting);
+    }
     static bool MaterialLooksPBR(RE::BSLightingShaderMaterialBase* mb) {
         if (!mb) return false;
         RE::BSTextureSet* ts = mb->textureSet.get();
@@ -1174,8 +1179,12 @@ namespace SWE {
             auto* sp = static_cast<RE::BSShaderProperty*>(lsp);
 
             const bool isArmorOrWeap = (cat == MatCat::ArmorClothing || cat == MatCat::Weapon);
+
             const bool likelyPBR = MaterialLooksPBR(mat);
+            const bool csTruePBR = lsp && IsTruePBR_CS(lsp);
+
             const bool pbrMode = Settings::pbrFriendlyMode.load() && (isArmorOrWeap || likelyPBR);
+            const bool pbrish = Settings::pbrFriendlyMode.load() && (likelyPBR || csTruePBR);
 
             if (wet <= 0.0005f) {
                 if (sp) {
@@ -1195,19 +1204,17 @@ namespace SWE {
             }
 
             if (sp) {
-                if (pbrMode && isArmorOrWeap) {
+                if (pbrish) {
                     SetSpecularEnabled(sp, base.hadSpecular);
-                    if (!base.hadSpecular) {
-                        // Force spec on if going PBR on non-spec base
-                    }
                 } else {
                     SetSpecularEnabled(sp, true);
                 }
             }
 
+
             RE::NiColor newSpec{base.baseSpecR, base.baseSpecG, base.baseSpecB};
             if ((newSpec.red + newSpec.green + newSpec.blue) < 0.05f) {
-                if (!(pbrMode && isArmorOrWeap)) {
+                if (!pbrish) {
                     newSpec = {0.7f, 0.7f, 0.7f};
                 }
             }
@@ -1217,7 +1224,7 @@ namespace SWE {
             float newScale = base.baseSpecularScale + wet * effScBoost * catMul;
             newScale = std::clamp(newScale, effMinSpec, effMaxSpec);
 
-            if (pbrMode && isArmorOrWeap) {
+            if (pbrish && isArmorOrWeap) {
                 const float amul = std::clamp(Settings::pbrArmorWeapMul.load(), 0.0f, 1.0f);
                 const float pbrG = Settings::pbrMaxGlossArmor.load();
                 const float pbrS = Settings::pbrMaxSpecArmor.load();
