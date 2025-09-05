@@ -108,7 +108,7 @@ namespace SWE {
                                 bool allowEnvWet = true, bool manualMode = false);
         void ApplyWetnessMaterials(RE::Actor* a, const float wetByCat[4]);
 
-        bool IsRainingOrSnowing() const;
+        bool IsRainingCurrent() const;
         bool IsSnowingCurrent() const;
         bool IsInsideWaterfallFX(const RE::Actor* a, const RE::TESObjectREFR* wfRef, float padX, float padY, float padZ,
                                  bool requireBelowTop) const;

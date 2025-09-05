@@ -16,7 +16,8 @@ namespace Settings {
     std::atomic<int> npcRadius{4096};
     std::atomic<bool> npcOptInOnly{false};
 
-    std::atomic<bool> rainSnowEnabled{true};
+    std::atomic<bool> rainEnabled{true};
+    std::atomic<bool> snowEnabled{true};
     std::atomic<bool> affectInSnow{false};
     std::atomic<bool> ignoreInterior{true};
 
@@ -27,6 +28,7 @@ namespace Settings {
 
     std::atomic<float> secondsToSoakWater{2.0f};
     std::atomic<float> secondsToSoakRain{36.0f};
+    std::atomic<float> secondsToSoakSnow{48.0f};
     std::atomic<float> secondsToDry{25.0f};
     std::atomic<float> minSubmergeToSoak{0.5f};
 
@@ -174,7 +176,8 @@ namespace Settings {
             apply_if(j, "affectNPCs", affectNPCs);
             apply_if(j, "npcRadius", npcRadius);
 
-            apply_if(j, "rainSnowEnabled", rainSnowEnabled);
+            apply_if(j, "rainEnabled", rainEnabled);
+            apply_if(j, "snowEnabled", snowEnabled);
             apply_if(j, "affectInSnow", affectInSnow);
             apply_if(j, "ignoreInterior", ignoreInterior);
 
@@ -185,6 +188,8 @@ namespace Settings {
 
             apply_if(j, "secondsToSoakWater", secondsToSoakWater);
             apply_if(j, "secondsToSoakRain", secondsToSoakRain);
+            apply_if(j, "secondsToSoakSnow", secondsToSoakSnow);
+
             apply_if(j, "secondsToDry", secondsToDry);
             apply_if(j, "minSubmergeToSoak", minSubmergeToSoak);
 
@@ -244,7 +249,8 @@ namespace Settings {
                       {"affectNPCs", affectNPCs.load()},
                       {"npcRadius", npcRadius.load()},
 
-                      {"rainSnowEnabled", rainSnowEnabled.load()},
+                      {"rainEnabled", rainEnabled.load()},
+                      {"snowEnabled", snowEnabled.load()},
                       {"affectInSnow", affectInSnow.load()},
                       {"ignoreInterior", ignoreInterior.load()},
 
@@ -255,6 +261,7 @@ namespace Settings {
 
                       {"secondsToSoakWater", secondsToSoakWater.load()},
                       {"secondsToSoakRain", secondsToSoakRain.load()},
+                      {"secondsToSoakSnow", secondsToSoakRain.load()},
                       {"secondsToDry", secondsToDry.load()},
                       {"minSubmergeToSoak", minSubmergeToSoak.load()},
 
@@ -304,7 +311,8 @@ namespace Settings {
         npcRadius.store(4096);
         npcOptInOnly.store(false);
 
-        rainSnowEnabled.store(false);
+        rainEnabled.store(false);
+        snowEnabled.store(false);
         affectInSnow.store(false);
         ignoreInterior.store(true);
 
@@ -315,6 +323,7 @@ namespace Settings {
 
         secondsToSoakWater.store(2.0f);
         secondsToSoakRain.store(36.0f);
+        secondsToSoakSnow.store(48.0f);
         secondsToDry.store(40.0f);
         minSubmergeToSoak.store(0.5f);
 

@@ -19,7 +19,8 @@ namespace Settings {
     extern std::atomic<int> npcRadius;
     extern std::atomic<bool> npcOptInOnly;
 
-    extern std::atomic<bool> rainSnowEnabled;
+    extern std::atomic<bool> rainEnabled;
+    extern std::atomic<bool> snowEnabled;
     extern std::atomic<bool> affectInSnow;
     extern std::atomic<bool> ignoreInterior;
 
@@ -30,6 +31,7 @@ namespace Settings {
 
     extern std::atomic<float> secondsToSoakWater;
     extern std::atomic<float> secondsToSoakRain;
+    extern std::atomic<float> secondsToSoakSnow;
     extern std::atomic<float> secondsToDry;
     extern std::atomic<float> minSubmergeToSoak;
 

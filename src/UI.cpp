@@ -195,6 +195,7 @@ namespace {
         Settings::maxGlossiness.store(400.0f);
         Settings::maxSpecularStrength.store(5.0f);
         Settings::secondsToSoakRain.store(60.0f);
+        Settings::secondsToSoakSnow.store(std::round(Settings::secondsToSoakRain.load() * 1.25f));
         Settings::secondsToDry.store(45.0f);
         Settings::pbrFriendlyMode.store(true);
         Settings::pbrArmorWeapMul.store(0.35f);
@@ -208,6 +209,7 @@ namespace {
         Settings::maxGlossiness.store(800.0f);
         Settings::maxSpecularStrength.store(10.0f);
         Settings::secondsToSoakRain.store(36.0f);
+        Settings::secondsToSoakSnow.store(std::round(Settings::secondsToSoakRain.load() * 1.25f));
         Settings::secondsToDry.store(40.0f);
         Settings::pbrFriendlyMode.store(false);
         Settings::pbrArmorWeapMul.store(0.5f);
@@ -333,10 +335,11 @@ void __stdcall UI::WetConfig::RenderSources() {
     if (ImGui::CollapsingHeader(sourcesHeader.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
         // Precipitation
         SubHeader("Precipitation");
-        bool rs = Settings::rainSnowEnabled.load();
-        if (ImGui::Checkbox("Enable rain/snow wetting", &rs)) Settings::rainSnowEnabled.store(rs);
-        bool snow = Settings::affectInSnow.load();
-        if (ImGui::Checkbox("Affect in snow", &snow)) Settings::affectInSnow.store(snow);
+        bool rain = Settings::rainEnabled.load();
+        bool snow = Settings::snowEnabled.load();
+        if (ImGui::Checkbox("Enable rain wetting", &rain)) Settings::rainEnabled.store(rain);
+        ImGui::SameLine();
+        if (ImGui::Checkbox("Enable snow wetting", &snow)) Settings::snowEnabled.store(snow);
 
         bool ig = Settings::ignoreInterior.load();
         if (ImGui::Checkbox("Ignore interiors", &ig)) Settings::ignoreInterior.store(ig);
@@ -352,10 +355,15 @@ void __stdcall UI::WetConfig::RenderSources() {
             }
         }
         {
-            float r = Settings::secondsToSoakRain.load();
-            if (FloatControl("Seconds to fully soak (Rain/Snow)", r, 5.0f, 3600.0f, "%.0f", 5.0f, 30.0f,
-                             "Time to reach 100% wetness in precipitation (outdoors).")) {
-                Settings::secondsToSoakRain.store(r);
+            float rr = Settings::secondsToSoakRain.load();
+            if (FloatControl("Seconds to fully soak (Rain)", rr, 5.0f, 3600.0f, "%.0f", 5.0f, 30.0f)) {
+                Settings::secondsToSoakRain.store(rr);
+            }
+        }
+        {
+            float rs = Settings::secondsToSoakSnow.load();
+            if (FloatControl("Seconds to fully soak (Snow)", rs, 5.0f, 3600.0f, "%.0f", 5.0f, 30.0f)) {
+                Settings::secondsToSoakSnow.store(rs);
             }
         }
         {

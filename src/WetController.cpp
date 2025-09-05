@@ -710,14 +710,10 @@ namespace SWE {
         _wet[pc->GetFormID()].wetness = clampf(w, 0.f, 1.f);
     }
 
-    bool WetController::IsRainingOrSnowing() const {
+    bool WetController::IsRainingCurrent() const {
         auto* sky = RE::Sky::GetSingleton();
         if (!sky || !sky->currentWeather) return false;
-
-        const auto flags = sky->currentWeather->data.flags;
-        const bool rainy = flags.any(RE::TESWeather::WeatherDataFlag::kRainy);
-        const bool snowy = flags.any(RE::TESWeather::WeatherDataFlag::kSnow);
-        return Settings::affectInSnow.load() ? (rainy || snowy) : rainy;
+        return sky->currentWeather->data.flags.any(RE::TESWeather::WeatherDataFlag::kRainy);
     }
 
     bool WetController::IsSnowingCurrent() const {
@@ -731,8 +727,12 @@ namespace SWE {
         auto* cell = a->GetParentCell();
         if (!cell) return false;
         if (cell->IsInteriorCell() && Settings::ignoreInterior.load()) return false;
-        return IsRainingOrSnowing();
+
+        const bool rainNow = Settings::rainEnabled.load() && IsRainingCurrent();
+        const bool snowNow = Settings::snowEnabled.load() && IsSnowingCurrent();
+        return rainNow || snowNow;
     }
+
 
     void WetController::TickGameThread() {
         if (!Settings::modEnabled.load() || !_running.load()) return;
@@ -914,7 +914,9 @@ namespace SWE {
         wd.lastSeen = std::chrono::steady_clock::now();
 
         const bool inWater = allowEnvWet && IsActorWetByWater(a);
-        const bool precipNow = allowEnvWet && Settings::rainSnowEnabled.load() && IsRainingOrSnowing();
+        const bool precipRain = allowEnvWet && Settings::rainEnabled.load() && IsRainingCurrent();
+        const bool precipSnow = allowEnvWet && Settings::snowEnabled.load() && IsSnowingCurrent();
+        const bool precipNow = (precipRain || precipSnow);
 
         bool isInterior = false;
         if (auto* cell = a->GetParentCell()) {
@@ -935,6 +937,8 @@ namespace SWE {
             (Settings::secondsToSoakWater.load() > 0.01f) ? (1.f / Settings::secondsToSoakWater.load()) : 1.0f;
         const float soakRainRate =
             (Settings::secondsToSoakRain.load() > 0.01f) ? (1.f / Settings::secondsToSoakRain.load()) : 1.0f;
+        const float soakSnowRate =
+            (Settings::secondsToSoakSnow.load() > 0.01f) ? (1.f / Settings::secondsToSoakSnow.load()) : 1.0f;
         const float soakWaterfallRate =
             (Settings::secondsToSoakWaterfall.load() > 0.01f) ? (1.f / Settings::secondsToSoakWaterfall.load()) : 1.0f;
         const float dryRate = (Settings::secondsToDry.load() > 0.01f) ? (1.f / Settings::secondsToDry.load()) : 1.0f;
@@ -1062,8 +1066,10 @@ namespace SWE {
         } else if (nearWaterfall) {
             w += soakWaterfallRate * dt;
         } else if (inPrecipOnActor) {
-            const float snowFactor = (IsSnowingCurrent() ? 0.8f : 1.0f);
-            w += soakRainRate * snowFactor * dt;
+            float inc = 0.0f;
+            if (precipRain) inc = std::max(inc, soakRainRate * dt);
+            if (precipSnow) inc = std::max(inc, soakSnowRate * dt);
+            w += inc;
         } else {
             w -= dryRate * dryMul * dt;
         }
@@ -1494,7 +1500,10 @@ namespace SWE {
     }
 
     bool WetController::IsUnderRoof(RE::Actor* a) const {
-        if (!a || !IsRainingOrSnowing()) return false;
+        if (!a) return false;
+        const bool anyPrecip = (Settings::rainEnabled.load() && IsRainingCurrent()) ||
+                               (Settings::snowEnabled.load() && IsSnowingCurrent());
+        if (!anyPrecip) return false;
 
         const RE::NiPoint3 base = a->GetPosition();
         const float headZ = ActorHeadZ(a) + 5.0f;
@@ -1539,9 +1548,17 @@ namespace SWE {
         return cal ? cal->GetDaysPassed() * 24.0f : 0.0f;
     }
 
-    float SWE::WetController::GetSubmergedLevel(RE::Actor* a) const { return ComputeSubmergeLevel(a); }
-    bool SWE::WetController::IsActorWetByWater(RE::Actor* a) const { return SWE::IsActorWetByWater(a); }
-    bool SWE::WetController::IsWetWeatherAround(RE::Actor* a) const { return IsRainingOrSnowing(); }
+    float WetController::GetSubmergedLevel(RE::Actor* a) const { return ComputeSubmergeLevel(a); }
+    bool WetController::IsActorWetByWater(RE::Actor* a) const { return SWE::IsActorWetByWater(a); }
+    bool WetController::IsWetWeatherAround(RE::Actor* a) const {
+        if (!a) return false;
+        auto* cell = a->GetParentCell();
+        if (cell && cell->IsInteriorCell() && Settings::ignoreInterior.load()) return false;
+
+        const bool rainNow = Settings::rainEnabled.load() && IsRainingCurrent();
+        const bool snowNow = Settings::snowEnabled.load() && IsSnowingCurrent();
+        return rainNow || snowNow;
+    }
 
     void WetController::SetExternalWetness(RE::Actor* a, std::string key, float value, float durationSec) {
         if (!a) return;
