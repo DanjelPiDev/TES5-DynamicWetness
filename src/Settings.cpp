@@ -73,6 +73,23 @@ namespace Settings {
         return actorOverrides;
     }
 
+    static std::uint32_t RebaseFormID(std::uint32_t saved, std::string_view plugin) {
+        if (saved == 0 || plugin.empty()) return saved;
+        auto* dh = RE::TESDataHandler::GetSingleton();
+        if (!dh) return saved;
+
+        const std::uint32_t top = saved >> 24;
+        const std::uint32_t local = (top == 0xFEu) ? (saved & 0x00000FFFu) : (saved & 0x00FFFFFFu);
+
+        if (auto light = dh->GetLoadedLightModIndex(plugin)) {
+            return 0xFE000000u | (static_cast<std::uint32_t>(*light) << 12) | (local & 0xFFFu);
+        }
+        if (auto reg = dh->GetLoadedModIndex(plugin)) {
+            return (static_cast<std::uint32_t>(*reg) << 24) | (local & 0x00FFFFFFu);
+        }
+        return saved;
+    }
+
     static std::uint32_t parse_form_id(const nlohmann::json& jv) {
         // Accept either number or hex string "0xXXXXXXXX"/"XXXXXXXX"
         if (jv.is_number_unsigned()) return jv.get<std::uint32_t>();
@@ -208,6 +225,13 @@ namespace Settings {
                 std::unique_lock lk(actorsMutex);
                 actorOverrides = std::move(aoTmp);
                 trackedActors = std::move(taTmp);
+
+                auto fixup = [](std::vector<FormSpec>& v) {
+                    for (auto& fs : v)
+                        if (fs.id && !fs.plugin.empty()) fs.id = RebaseFormID(fs.id, fs.plugin);
+                };
+                fixup(actorOverrides);
+                fixup(trackedActors);
             }
         } catch (...) {
         }

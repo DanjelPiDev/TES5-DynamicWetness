@@ -616,8 +616,11 @@ void __stdcall UI::WetConfig::RenderNPCs() {
                         if (ImGui::SmallButton("Add")) {
                             {
                                 std::unique_lock lk(Settings::actorsMutex);
-                                if (!find_by_id(Settings::trackedActors, fid))
-                                    Settings::trackedActors.push_back({"", fid, 1.0f, true, 0x0F});
+                                if (!find_by_id(Settings::trackedActors, fid)) {
+                                    std::string plugin;
+                                    if (auto* f = ab->GetFile(0)) plugin = f->GetFilename();
+                                    Settings::trackedActors.push_back({plugin, fid, 1.0f, true, 0x0F});
+                                }
                             }
                             SWE::WetController::GetSingleton()->RefreshNow();
                         }
@@ -633,9 +636,14 @@ void __stdcall UI::WetConfig::RenderNPCs() {
             // Add by FormID
             {
                 static char addHexAll[16] = "";
+                static char addHexPlugin[64] = "";
                 ImGui::SetNextItemWidth(140);
                 ImGui::InputTextWithHint("##addHexAll", "FormID (hex)", addHexAll, IM_ARRAYSIZE(addHexAll),
                                          ImGuiInputTextFlags_CharsHexadecimal);
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(220);
+                ImGui::InputTextWithHint("##addHexPlugin", "Plugin name (optional)", addHexPlugin,
+                                         IM_ARRAYSIZE(addHexPlugin));
                 ImGui::SameLine();
                 if (ImGui::Button("Add by FormID")) {
                     std::uint32_t id = 0;
@@ -644,12 +652,13 @@ void __stdcall UI::WetConfig::RenderNPCs() {
                         if (s.rfind("0x", 0) == 0 || s.rfind("0X", 0) == 0) s = s.substr(2);
                         auto res = std::from_chars(s.data(), s.data() + s.size(), id, 16);
                         if (res.ec == std::errc()) {
+                            std::string plugin = addHexPlugin;
                             {
                                 std::unique_lock lk(Settings::actorsMutex);
                                 if (!find_by_id(Settings::trackedActors, id))
-                                    Settings::trackedActors.push_back({"", id, 1.0f, true, 0x0F});
+                                    Settings::trackedActors.push_back({plugin, id, 1.0f, true, 0x0F});
                                 if (!find_by_id(Settings::actorOverrides, id))
-                                    Settings::actorOverrides.push_back({"", id, 1.0f, true, 0x0F});
+                                    Settings::actorOverrides.push_back({plugin, id, 1.0f, true, 0x0F});
                             }
                             SWE::WetController::GetSingleton()->RefreshNow();
                         }
@@ -783,8 +792,13 @@ void __stdcall UI::WetConfig::RenderNPCs() {
                     // ensure tracked exists
                     auto it = std::find_if(Settings::trackedActors.begin(), Settings::trackedActors.end(),
                                            [&](const Settings::FormSpec& fs) { return fs.id == fid; });
+                    std::string pluginName;
+                    if (auto* npc = RE::TESForm::LookupByID<RE::TESNPC>(fid)) {
+                        if (auto* f = npc->GetFile(0)) pluginName = f->GetFilename();
+                    }
                     if (it == Settings::trackedActors.end()) {
-                        Settings::trackedActors.push_back({"", fid, 1.0f, true, 0x0F, autoWet});
+                        Settings::trackedActors.push_back(
+                            {pluginName, fid, /*value*/ 1.0f, /*enabled*/ true, 0x0F /*mask*/});
                     } else {
                         it->autoWet = autoWet;
                     }
@@ -792,7 +806,8 @@ void __stdcall UI::WetConfig::RenderNPCs() {
                         auto o = std::find_if(Settings::actorOverrides.begin(), Settings::actorOverrides.end(),
                                               [&](const Settings::FormSpec& fs) { return fs.id == fid; });
                         if (o == Settings::actorOverrides.end())
-                            Settings::actorOverrides.push_back({"", fid, 1.0f, true, 0x0F});
+                            Settings::actorOverrides.push_back(
+                                {pluginName, fid, /*value*/ 1.0f, /*enabled*/ true, 0x0F /*mask*/});
                     }
                     SWE::WetController::GetSingleton()->RefreshNow();
                 }

@@ -253,6 +253,8 @@ namespace SWE {
         const float h = std::max(0.0001f, (maxZ - minZ));
         return std::clamp((waterZ - minZ) / h, 0.0f, 1.0f);
     }
+    static inline std::string to_string_compat(const char* s) { return s ? std::string(s) : std::string{}; }
+    static inline std::string to_string_compat(std::string_view sv) { return std::string(sv); }
     static inline bool IsActorSwimming(const RE::Actor* a) {
         if (!a) return false;
         return a->GetActorRuntimeData().boolBits.any(RE::Actor::BOOL_BITS::kSwimming);
@@ -762,12 +764,53 @@ namespace SWE {
                 if (fs.enabled && fs.id) allowIDs.insert(fs.id);
         }
 
+        auto local_id = [](std::uint32_t id) -> std::uint32_t {
+            return ((id >> 24) == 0xFEu) ? (id & 0x00000FFFu) : (id & 0x00FFFFFFu);
+        };
+
+        auto same_local = [&](std::uint32_t a, std::uint32_t b) -> bool {
+            if (!a || !b) return false;
+            return local_id(a) == local_id(b);
+        };
+
+        auto lower = [](std::string s) {
+            std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+            return s;
+        };
+
+        auto get_base_plugin = [](RE::Actor* a) -> std::string {
+            if (!a) return {};
+            if (auto* ab = a->GetActorBase()) {
+                if (auto* f = ab->GetFile(0)) {
+                    return to_string_compat(f->GetFilename());
+                }
+            }
+            return {};
+        };
+
         auto isAllowed = [&](RE::Actor* a) -> bool {
             if (!optIn || !a) return true;
+
             const std::uint32_t refID = a->GetFormID();
             const std::uint32_t baseID = (a->GetActorBase() ? a->GetActorBase()->GetFormID() : 0);
-            return allowIDs.count(refID) || allowIDs.count(baseID);
+
+            if (allowIDs.count(refID) || allowIDs.count(baseID)) return true;
+
+            // ESL safe check
+            const std::string plugin = lower(get_base_plugin(a));
+            if (!plugin.empty()) {
+                auto matches = [&](const Settings::FormSpec& fs) {
+                    if (!fs.enabled || !fs.id || fs.plugin.empty()) return false;
+                    if (lower(fs.plugin) != plugin) return false;
+                    return same_local(fs.id, baseID) || same_local(fs.id, refID);
+                };
+                if (std::any_of(trackedSnap.begin(), trackedSnap.end(), matches)) return true;
+                if (std::any_of(overridesSnap.begin(), overridesSnap.end(), matches)) return true;
+            }
+
+            return false;
         };
+
 
         RE::Actor* player = RE::PlayerCharacter::GetSingleton();
         if (player) UpdateActorWetness(player, dt, overridesSnap, true);
@@ -805,7 +848,7 @@ namespace SWE {
 
                     const std::uint32_t refID = a->GetFormID();
                     const std::uint32_t baseID = (a->GetActorBase() ? a->GetActorBase()->GetFormID() : 0);
-                    const bool selected = !optIn || allowIDs.count(refID) || allowIDs.count(baseID);
+                    const bool selected = isAllowed(a);
 
                     if (useRad && player) {
                         const float d2 = a->GetPosition().GetSquaredDistance(pcPos);
