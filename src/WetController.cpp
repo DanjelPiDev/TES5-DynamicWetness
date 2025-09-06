@@ -649,12 +649,20 @@ namespace SWE {
         return match;
     }
 
-    void WetController::Install() { _lastTick = std::chrono::steady_clock::now(); }
+    void WetController::Install() {
+        _lastTick = std::chrono::steady_clock::now();
+        _lastGameHours = GetGameHours();
+        _hasLastGameHours = true;
+        _carrySkipSec = 0.0;
+    }
 
     void WetController::Start() {
         if (_running.exchange(true)) return;
 
         _lastTick = std::chrono::steady_clock::now();
+        _lastGameHours = GetGameHours();
+        _hasLastGameHours = true;
+        _carrySkipSec = 0.0;
 
         _timerAlive.store(true);
         _timerThread = std::thread([this]() {
@@ -737,18 +745,42 @@ namespace SWE {
     void WetController::TickGameThread() {
         if (!Settings::modEnabled.load() || !_running.load()) return;
 
+        float ghNow = GetGameHours();
+        if (!_hasLastGameHours) {
+            _lastGameHours = ghNow;
+            _hasLastGameHours = true;
+        }
+
+        float ghDelta = ghNow - _lastGameHours;
+        if (ghDelta < 0.0f) ghDelta = 0.0f;
+        float ghDeltaSec = ghDelta * 3600.0f;
+        _lastGameHours = ghNow;
+
         const auto now = std::chrono::steady_clock::now();
         const auto wantDelta = std::chrono::milliseconds(std::max(10, Settings::updateIntervalMs.load()));
         const auto elapsed = now - _lastTick;
-        if (elapsed < wantDelta) return;
+        if (elapsed < wantDelta) {
+            if (auto* ui0 = RE::UI::GetSingleton()) {
+                if (ui0->GameIsPaused() || ui0->IsMenuOpen(RE::MainMenu::MENU_NAME)) {
+                    _carrySkipSec += ghDeltaSec;
+                }
+            }
+            return;
+        }
 
         float dt = std::chrono::duration<float>(elapsed).count();
         _lastTick = now;
         dt = clampf(dt, 0.0f, 0.2f);
 
         if (auto* ui = RE::UI::GetSingleton()) {
-            if (ui->GameIsPaused() || ui->IsMenuOpen(RE::MainMenu::MENU_NAME)) return;
+            if (ui->GameIsPaused() || ui->IsMenuOpen(RE::MainMenu::MENU_NAME)) {
+                _carrySkipSec += ghDeltaSec;
+                return;
+            }
         }
+
+        double effDt = static_cast<double>(dt) + _carrySkipSec + static_cast<double>(ghDeltaSec);
+        _carrySkipSec = 0.0;
 
         const auto overridesSnap = Settings::SnapshotActorOverrides();
         const auto trackedSnap = Settings::SnapshotTrackedActors();
@@ -813,7 +845,7 @@ namespace SWE {
 
 
         RE::Actor* player = RE::PlayerCharacter::GetSingleton();
-        if (player) UpdateActorWetness(player, dt, overridesSnap, true);
+        if (player) UpdateActorWetness(player, static_cast<float>(effDt), overridesSnap, true);
 
         if (Settings::affectNPCs.load()) {
             if (auto* proc = RE::ProcessLists::GetSingleton()) {
@@ -886,7 +918,7 @@ namespace SWE {
                     const bool manualMode = !autoWet;
                     const bool allowEnvWet = autoWet;
 
-                    UpdateActorWetness(a, dt, overridesSnap, allowEnvWet, manualMode);
+                    UpdateActorWetness(a, static_cast<float>(effDt), overridesSnap, allowEnvWet, manualMode);
                 }
             }
         }

@@ -67,6 +67,10 @@ namespace SWE {
         std::atomic<bool> _timerAlive{false};
         std::thread _timerThread;
 
+        float _lastGameHours{0.0f};
+        double _carrySkipSec{0.0};
+        bool _hasLastGameHours{false};
+
         void TickGameThread();
         void ScheduleNextTick();
 

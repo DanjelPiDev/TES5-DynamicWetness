@@ -368,7 +368,7 @@ void __stdcall UI::WetConfig::RenderSources() {
         }
         {
             float d = Settings::secondsToDry.load();
-            if (FloatControl("Seconds to dry", d, 2.0f, 3600.0f, "%.0f", 5.0f, 30.0f,
+            if (FloatControl("Seconds to dry", d, 2.0f, 7200.0f, "%.0f", 5.0f, 30.0f,
                              "Time from 100% -> 0% wetness (without fire/heat boost).")) {
                 Settings::secondsToDry.store(d);
             }
