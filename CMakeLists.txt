@@ -6,7 +6,7 @@ message("Using toolchain file ${CMAKE_TOOLCHAIN_FILE}.")
 ########################################################################################################################
 project(
     DynamicWetness 
-    VERSION 1.0.0
+    VERSION 1.4.0
     DESCRIPTION "Skyrim Special Edition Dynamic Wetness"
     LANGUAGES CXX)
 

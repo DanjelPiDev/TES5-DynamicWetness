@@ -67,6 +67,10 @@ namespace SWE {
         std::atomic<bool> _timerAlive{false};
         std::thread _timerThread;
 
+        float _lastGameHours{0.0f};
+        double _carrySkipSec{0.0};
+        bool _hasLastGameHours{false};
+
         void TickGameThread();
         void ScheduleNextTick();
 
@@ -108,7 +112,7 @@ namespace SWE {
                                 bool allowEnvWet = true, bool manualMode = false);
         void ApplyWetnessMaterials(RE::Actor* a, const float wetByCat[4]);
 
-        bool IsRainingOrSnowing() const;
+        bool IsRainingCurrent() const;
         bool IsSnowingCurrent() const;
         bool IsInsideWaterfallFX(const RE::Actor* a, const RE::TESObjectREFR* wfRef, float padX, float padY, float padZ,
                                  bool requireBelowTop) const;

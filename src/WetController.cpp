@@ -253,6 +253,8 @@ namespace SWE {
         const float h = std::max(0.0001f, (maxZ - minZ));
         return std::clamp((waterZ - minZ) / h, 0.0f, 1.0f);
     }
+    static inline std::string to_string_compat(const char* s) { return s ? std::string(s) : std::string{}; }
+    static inline std::string to_string_compat(std::string_view sv) { return std::string(sv); }
     static inline bool IsActorSwimming(const RE::Actor* a) {
         if (!a) return false;
         return a->GetActorRuntimeData().boolBits.any(RE::Actor::BOOL_BITS::kSwimming);
@@ -356,6 +358,11 @@ namespace SWE {
         return false;
     }
 
+    // TruePBR sets kVertexLighting
+    static inline bool IsTruePBR_CS(const RE::BSLightingShaderProperty* lsp) {
+        if (!lsp) return false;
+        return lsp->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kVertexLighting);
+    }
     static bool MaterialLooksPBR(RE::BSLightingShaderMaterialBase* mb) {
         if (!mb) return false;
         RE::BSTextureSet* ts = mb->textureSet.get();
@@ -642,12 +649,20 @@ namespace SWE {
         return match;
     }
 
-    void WetController::Install() { _lastTick = std::chrono::steady_clock::now(); }
+    void WetController::Install() {
+        _lastTick = std::chrono::steady_clock::now();
+        _lastGameHours = GetGameHours();
+        _hasLastGameHours = true;
+        _carrySkipSec = 0.0;
+    }
 
     void WetController::Start() {
         if (_running.exchange(true)) return;
 
         _lastTick = std::chrono::steady_clock::now();
+        _lastGameHours = GetGameHours();
+        _hasLastGameHours = true;
+        _carrySkipSec = 0.0;
 
         _timerAlive.store(true);
         _timerThread = std::thread([this]() {
@@ -703,14 +718,10 @@ namespace SWE {
         _wet[pc->GetFormID()].wetness = clampf(w, 0.f, 1.f);
     }
 
-    bool WetController::IsRainingOrSnowing() const {
+    bool WetController::IsRainingCurrent() const {
         auto* sky = RE::Sky::GetSingleton();
         if (!sky || !sky->currentWeather) return false;
-
-        const auto flags = sky->currentWeather->data.flags;
-        const bool rainy = flags.any(RE::TESWeather::WeatherDataFlag::kRainy);
-        const bool snowy = flags.any(RE::TESWeather::WeatherDataFlag::kSnow);
-        return Settings::affectInSnow.load() ? (rainy || snowy) : rainy;
+        return sky->currentWeather->data.flags.any(RE::TESWeather::WeatherDataFlag::kRainy);
     }
 
     bool WetController::IsSnowingCurrent() const {
@@ -724,24 +735,52 @@ namespace SWE {
         auto* cell = a->GetParentCell();
         if (!cell) return false;
         if (cell->IsInteriorCell() && Settings::ignoreInterior.load()) return false;
-        return IsRainingOrSnowing();
+
+        const bool rainNow = Settings::rainEnabled.load() && IsRainingCurrent();
+        const bool snowNow = Settings::snowEnabled.load() && IsSnowingCurrent();
+        return rainNow || snowNow;
     }
+
 
     void WetController::TickGameThread() {
         if (!Settings::modEnabled.load() || !_running.load()) return;
 
+        float ghNow = GetGameHours();
+        if (!_hasLastGameHours) {
+            _lastGameHours = ghNow;
+            _hasLastGameHours = true;
+        }
+
+        float ghDelta = ghNow - _lastGameHours;
+        if (ghDelta < 0.0f) ghDelta = 0.0f;
+        float ghDeltaSec = ghDelta * 3600.0f;
+        _lastGameHours = ghNow;
+
         const auto now = std::chrono::steady_clock::now();
         const auto wantDelta = std::chrono::milliseconds(std::max(10, Settings::updateIntervalMs.load()));
         const auto elapsed = now - _lastTick;
-        if (elapsed < wantDelta) return;
+        if (elapsed < wantDelta) {
+            if (auto* ui0 = RE::UI::GetSingleton()) {
+                if (ui0->GameIsPaused() || ui0->IsMenuOpen(RE::MainMenu::MENU_NAME)) {
+                    _carrySkipSec += ghDeltaSec;
+                }
+            }
+            return;
+        }
 
         float dt = std::chrono::duration<float>(elapsed).count();
         _lastTick = now;
         dt = clampf(dt, 0.0f, 0.2f);
 
         if (auto* ui = RE::UI::GetSingleton()) {
-            if (ui->GameIsPaused() || ui->IsMenuOpen(RE::MainMenu::MENU_NAME)) return;
+            if (ui->GameIsPaused() || ui->IsMenuOpen(RE::MainMenu::MENU_NAME)) {
+                _carrySkipSec += ghDeltaSec;
+                return;
+            }
         }
+
+        double effDt = static_cast<double>(dt) + _carrySkipSec + static_cast<double>(ghDeltaSec);
+        _carrySkipSec = 0.0;
 
         const auto overridesSnap = Settings::SnapshotActorOverrides();
         const auto trackedSnap = Settings::SnapshotTrackedActors();
@@ -757,15 +796,56 @@ namespace SWE {
                 if (fs.enabled && fs.id) allowIDs.insert(fs.id);
         }
 
-        auto isAllowed = [&](RE::Actor* a) -> bool {
-            if (!optIn || !a) return true;
-            const std::uint32_t refID = a->GetFormID();
-            const std::uint32_t baseID = (a->GetActorBase() ? a->GetActorBase()->GetFormID() : 0);
-            return allowIDs.count(refID) || allowIDs.count(baseID);
+        auto local_id = [](std::uint32_t id) -> std::uint32_t {
+            return ((id >> 24) == 0xFEu) ? (id & 0x00000FFFu) : (id & 0x00FFFFFFu);
         };
 
+        auto same_local = [&](std::uint32_t a, std::uint32_t b) -> bool {
+            if (!a || !b) return false;
+            return local_id(a) == local_id(b);
+        };
+
+        auto lower = [](std::string s) {
+            std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+            return s;
+        };
+
+        auto get_base_plugin = [](RE::Actor* a) -> std::string {
+            if (!a) return {};
+            if (auto* ab = a->GetActorBase()) {
+                if (auto* f = ab->GetFile(0)) {
+                    return to_string_compat(f->GetFilename());
+                }
+            }
+            return {};
+        };
+
+        auto isAllowed = [&](RE::Actor* a) -> bool {
+            if (!optIn || !a) return true;
+
+            const std::uint32_t refID = a->GetFormID();
+            const std::uint32_t baseID = (a->GetActorBase() ? a->GetActorBase()->GetFormID() : 0);
+
+            if (allowIDs.count(refID) || allowIDs.count(baseID)) return true;
+
+            // ESL safe check
+            const std::string plugin = lower(get_base_plugin(a));
+            if (!plugin.empty()) {
+                auto matches = [&](const Settings::FormSpec& fs) {
+                    if (!fs.enabled || !fs.id || fs.plugin.empty()) return false;
+                    if (lower(fs.plugin) != plugin) return false;
+                    return same_local(fs.id, baseID) || same_local(fs.id, refID);
+                };
+                if (std::any_of(trackedSnap.begin(), trackedSnap.end(), matches)) return true;
+                if (std::any_of(overridesSnap.begin(), overridesSnap.end(), matches)) return true;
+            }
+
+            return false;
+        };
+
+
         RE::Actor* player = RE::PlayerCharacter::GetSingleton();
-        if (player) UpdateActorWetness(player, dt, overridesSnap, true);
+        if (player) UpdateActorWetness(player, static_cast<float>(effDt), overridesSnap, true);
 
         if (Settings::affectNPCs.load()) {
             if (auto* proc = RE::ProcessLists::GetSingleton()) {
@@ -800,7 +880,7 @@ namespace SWE {
 
                     const std::uint32_t refID = a->GetFormID();
                     const std::uint32_t baseID = (a->GetActorBase() ? a->GetActorBase()->GetFormID() : 0);
-                    const bool selected = !optIn || allowIDs.count(refID) || allowIDs.count(baseID);
+                    const bool selected = isAllowed(a);
 
                     if (useRad && player) {
                         const float d2 = a->GetPosition().GetSquaredDistance(pcPos);
@@ -838,7 +918,7 @@ namespace SWE {
                     const bool manualMode = !autoWet;
                     const bool allowEnvWet = autoWet;
 
-                    UpdateActorWetness(a, dt, overridesSnap, allowEnvWet, manualMode);
+                    UpdateActorWetness(a, static_cast<float>(effDt), overridesSnap, allowEnvWet, manualMode);
                 }
             }
         }
@@ -866,7 +946,9 @@ namespace SWE {
         wd.lastSeen = std::chrono::steady_clock::now();
 
         const bool inWater = allowEnvWet && IsActorWetByWater(a);
-        const bool precipNow = allowEnvWet && Settings::rainSnowEnabled.load() && IsRainingOrSnowing();
+        const bool precipRain = allowEnvWet && Settings::rainEnabled.load() && IsRainingCurrent();
+        const bool precipSnow = allowEnvWet && Settings::snowEnabled.load() && IsSnowingCurrent();
+        const bool precipNow = (precipRain || precipSnow);
 
         bool isInterior = false;
         if (auto* cell = a->GetParentCell()) {
@@ -887,6 +969,8 @@ namespace SWE {
             (Settings::secondsToSoakWater.load() > 0.01f) ? (1.f / Settings::secondsToSoakWater.load()) : 1.0f;
         const float soakRainRate =
             (Settings::secondsToSoakRain.load() > 0.01f) ? (1.f / Settings::secondsToSoakRain.load()) : 1.0f;
+        const float soakSnowRate =
+            (Settings::secondsToSoakSnow.load() > 0.01f) ? (1.f / Settings::secondsToSoakSnow.load()) : 1.0f;
         const float soakWaterfallRate =
             (Settings::secondsToSoakWaterfall.load() > 0.01f) ? (1.f / Settings::secondsToSoakWaterfall.load()) : 1.0f;
         const float dryRate = (Settings::secondsToDry.load() > 0.01f) ? (1.f / Settings::secondsToDry.load()) : 1.0f;
@@ -1014,8 +1098,10 @@ namespace SWE {
         } else if (nearWaterfall) {
             w += soakWaterfallRate * dt;
         } else if (inPrecipOnActor) {
-            const float snowFactor = (IsSnowingCurrent() ? 0.8f : 1.0f);
-            w += soakRainRate * snowFactor * dt;
+            float inc = 0.0f;
+            if (precipRain) inc = std::max(inc, soakRainRate * dt);
+            if (precipSnow) inc = std::max(inc, soakSnowRate * dt);
+            w += inc;
         } else {
             w -= dryRate * dryMul * dt;
         }
@@ -1174,8 +1260,12 @@ namespace SWE {
             auto* sp = static_cast<RE::BSShaderProperty*>(lsp);
 
             const bool isArmorOrWeap = (cat == MatCat::ArmorClothing || cat == MatCat::Weapon);
+
             const bool likelyPBR = MaterialLooksPBR(mat);
-            const bool pbrMode = Settings::pbrFriendlyMode.load() && (isArmorOrWeap || likelyPBR);
+            const bool csTruePBR = isArmorOrWeap && lsp && IsTruePBR_CS(lsp);
+
+            //const bool pbrMode = Settings::pbrFriendlyMode.load() && (isArmorOrWeap || likelyPBR);
+            const bool pbrish = Settings::pbrFriendlyMode.load() && (likelyPBR || csTruePBR);
 
             if (wet <= 0.0005f) {
                 if (sp) {
@@ -1195,19 +1285,17 @@ namespace SWE {
             }
 
             if (sp) {
-                if (pbrMode && isArmorOrWeap) {
+                if (pbrish) {
                     SetSpecularEnabled(sp, base.hadSpecular);
-                    if (!base.hadSpecular) {
-                        // Force spec on if going PBR on non-spec base
-                    }
                 } else {
                     SetSpecularEnabled(sp, true);
                 }
             }
 
+
             RE::NiColor newSpec{base.baseSpecR, base.baseSpecG, base.baseSpecB};
             if ((newSpec.red + newSpec.green + newSpec.blue) < 0.05f) {
-                if (!(pbrMode && isArmorOrWeap)) {
+                if (!pbrish) {
                     newSpec = {0.7f, 0.7f, 0.7f};
                 }
             }
@@ -1217,7 +1305,7 @@ namespace SWE {
             float newScale = base.baseSpecularScale + wet * effScBoost * catMul;
             newScale = std::clamp(newScale, effMinSpec, effMaxSpec);
 
-            if (pbrMode && isArmorOrWeap) {
+            if (pbrish && isArmorOrWeap) {
                 const float amul = std::clamp(Settings::pbrArmorWeapMul.load(), 0.0f, 1.0f);
                 const float pbrG = Settings::pbrMaxGlossArmor.load();
                 const float pbrS = Settings::pbrMaxSpecArmor.load();
@@ -1444,7 +1532,10 @@ namespace SWE {
     }
 
     bool WetController::IsUnderRoof(RE::Actor* a) const {
-        if (!a || !IsRainingOrSnowing()) return false;
+        if (!a) return false;
+        const bool anyPrecip = (Settings::rainEnabled.load() && IsRainingCurrent()) ||
+                               (Settings::snowEnabled.load() && IsSnowingCurrent());
+        if (!anyPrecip) return false;
 
         const RE::NiPoint3 base = a->GetPosition();
         const float headZ = ActorHeadZ(a) + 5.0f;
@@ -1489,9 +1580,17 @@ namespace SWE {
         return cal ? cal->GetDaysPassed() * 24.0f : 0.0f;
     }
 
-    float SWE::WetController::GetSubmergedLevel(RE::Actor* a) const { return ComputeSubmergeLevel(a); }
-    bool SWE::WetController::IsActorWetByWater(RE::Actor* a) const { return SWE::IsActorWetByWater(a); }
-    bool SWE::WetController::IsWetWeatherAround(RE::Actor* a) const { return IsRainingOrSnowing(); }
+    float WetController::GetSubmergedLevel(RE::Actor* a) const { return ComputeSubmergeLevel(a); }
+    bool WetController::IsActorWetByWater(RE::Actor* a) const { return SWE::IsActorWetByWater(a); }
+    bool WetController::IsWetWeatherAround(RE::Actor* a) const {
+        if (!a) return false;
+        auto* cell = a->GetParentCell();
+        if (cell && cell->IsInteriorCell() && Settings::ignoreInterior.load()) return false;
+
+        const bool rainNow = Settings::rainEnabled.load() && IsRainingCurrent();
+        const bool snowNow = Settings::snowEnabled.load() && IsSnowingCurrent();
+        return rainNow || snowNow;
+    }
 
     void WetController::SetExternalWetness(RE::Actor* a, std::string key, float value, float durationSec) {
         if (!a) return;
