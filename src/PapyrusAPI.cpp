@@ -60,6 +60,31 @@ namespace SWE::Papyrus {
         auto* wc = SWE::WetController::GetSingleton();
         return (a && wc) ? wc->IsActorInExteriorWet(a) : false;
     }
+    bool IsActorWetByWater(RE::StaticFunctionTag*, RE::Actor* a) {
+        auto* wc = SWE::WetController::GetSingleton();
+        return (a && wc) ? wc->IsActorWetByWater(a) : false;
+    }
+    float GetSubmergedLevel(RE::StaticFunctionTag*, RE::Actor* a) {
+        auto* wc = SWE::WetController::GetSingleton();
+        return (a && wc) ? wc->GetSubmergedLevel(a) : 0.0f;
+    }
+    bool IsWetWeatherAround(RE::StaticFunctionTag*, RE::Actor* a) {
+        auto* wc = SWE::WetController::GetSingleton();
+        return (a && wc) ? wc->IsWetWeatherAround(a) : false;
+    }
+    std::int32_t GetEnvMask(RE::StaticFunctionTag*, RE::Actor* a) {
+        if (!a) return 0;
+        std::uint32_t m = 0;
+        auto* wc = SWE::WetController::GetSingleton();
+        if (!wc) return 0;
+        if (wc->IsActorWetByWater(a)) m |= SWE::Papyrus::SWE_ENV_WATER;
+        if (wc->IsWetWeatherAround(a)) m |= SWE::Papyrus::SWE_ENV_WET_WEATHER;
+        if (wc->IsNearHeatSource(a, std::max(50.0f, Settings::nearFireRadius.load())))
+            m |= SWE::Papyrus::SWE_ENV_NEAR_HEAT;
+        if (wc->IsUnderRoof(a)) m |= SWE::Papyrus::SWE_ENV_UNDER_ROOF;
+        if (wc->IsActorInExteriorWet(a) && !wc->IsUnderRoof(a)) m |= SWE::Papyrus::SWE_ENV_EXTERIOR_OPEN;
+        return static_cast<std::int32_t>(m);
+    }
 
     bool Register(RE::BSScript::IVirtualMachine* vm) {
         vm->RegisterFunction("SetExternalWetness", "SWE", SetExternalWetness);
@@ -72,6 +97,10 @@ namespace SWE::Papyrus {
         vm->RegisterFunction("IsUnderRoof", "SWE", IsUnderRoof);
         vm->RegisterFunction("IsActorInExteriorWet", "SWE", IsActorInExteriorWet);
         vm->RegisterFunction("GetBaseWetness", "SWE", GetBaseWetness);
+        vm->RegisterFunction("IsActorWetByWater", "SWE", IsActorWetByWater);
+        vm->RegisterFunction("GetSubmergedLevel", "SWE", GetSubmergedLevel);
+        vm->RegisterFunction("IsWetWeatherAround", "SWE", IsWetWeatherAround);
+        vm->RegisterFunction("GetEnvMask", "SWE", GetEnvMask);
         return true;
     }
 }

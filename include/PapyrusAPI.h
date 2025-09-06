@@ -39,4 +39,8 @@ namespace SWE::Papyrus {
     bool IsNearHeatSource(RE::StaticFunctionTag*, RE::Actor* a, float radius);
     bool IsUnderRoof(RE::StaticFunctionTag*, RE::Actor* a);
     bool IsActorInExteriorWet(RE::StaticFunctionTag*, RE::Actor* a);
+    bool IsActorWetByWater(RE::StaticFunctionTag*, RE::Actor* a);
+    float GetSubmergedLevel(RE::StaticFunctionTag*, RE::Actor* a);
+    bool IsWetWeatherAround(RE::StaticFunctionTag*, RE::Actor* a);
+    std::int32_t GetEnvMask(RE::StaticFunctionTag*, RE::Actor* a);
 }
