@@ -102,6 +102,8 @@ namespace SWE {
             };
             CatOverrides activeOv[4]{};  // 0=Skin, 1=Hair, 2=Armor, 3=Weapon
             float lastAppliedCat[4]{-1.f, -1.f, -1.f, -1.f};
+            float simCat[4] = {0.f, 0.f, 0.f, 0.f};
+            bool simInit = false;
         };
 
         std::unordered_map<uint32_t, WetData> _wet;
@@ -120,7 +122,8 @@ namespace SWE {
         bool RayHitsCover(const RE::NiPoint3& from, const RE::NiPoint3& to,
                           const RE::TESObjectREFR* ignoreRef = nullptr) const;
 
-        void ComputeWetByCategory(WetData& wd, float baseWet, float outWetByCat[4], float dt, bool envDominates);
+        void ComputeWetByCategory(WetData& wd, float baseWet, float outWetByCat[4], float dt, bool envDominates,
+                                  float dryMul);
         float GetGameHours() const;
 
         mutable std::recursive_mutex _mtx;

@@ -973,7 +973,7 @@ namespace SWE {
             (Settings::secondsToSoakSnow.load() > 0.01f) ? (1.f / Settings::secondsToSoakSnow.load()) : 1.0f;
         const float soakWaterfallRate =
             (Settings::secondsToSoakWaterfall.load() > 0.01f) ? (1.f / Settings::secondsToSoakWaterfall.load()) : 1.0f;
-        const float dryRate = (Settings::secondsToDry.load() > 0.01f) ? (1.f / Settings::secondsToDry.load()) : 1.0f;
+
 
         float dryMul = 1.0f;
         if (!inWater) {
@@ -1089,7 +1089,9 @@ namespace SWE {
             nearWaterfall = wd.cachedInsideWaterfall;
         }
 
-        float w = wd.wetness;
+        float wPrevMax = std::max(std::max(wd.lastAppliedCat[0], wd.lastAppliedCat[1]),
+                                  std::max(wd.lastAppliedCat[2], wd.lastAppliedCat[3]));
+        float w = std::max(wd.wetness, wPrevMax);
 
         const bool envDominates = allowEnvWet && (inWater || nearWaterfall || inPrecipOnActor);
 
@@ -1102,15 +1104,13 @@ namespace SWE {
             if (precipRain) inc = std::max(inc, soakRainRate * dt);
             if (precipSnow) inc = std::max(inc, soakSnowRate * dt);
             w += inc;
-        } else {
-            w -= dryRate * dryMul * dt;
         }
 
         w = clampf(w, 0.f, 1.f);
-        wd.baseWetness = w;
+        // wd.baseWetness = w;
 
         float wetByCat[4]{};
-        ComputeWetByCategory(wd, w, wetByCat, dt, envDominates);
+        ComputeWetByCategory(wd, w, wetByCat, dt, envDominates, dryMul);
 
         float forcedW = -1.0f;
         std::uint8_t forcedMask = 0;
@@ -1140,6 +1140,9 @@ namespace SWE {
                 ApplyWetnessMaterials(a, zeros);
                 wd.lastAppliedCat[0] = wd.lastAppliedCat[1] = wd.lastAppliedCat[2] = wd.lastAppliedCat[3] = 0.f;
                 wd.lastAppliedWet = 0.0f;
+
+                wd.simCat[0] = wd.simCat[1] = wd.simCat[2] = wd.simCat[3] = 0.f;
+                wd.simInit = true;
             }
         } else {
             bool anyChange = false;
@@ -1369,7 +1372,7 @@ namespace SWE {
     }
 
     void WetController::ComputeWetByCategory(WetData& wd, float baseWet, float outWetByCat[4], float dt,
-                                             bool envDominates) {
+                                             bool envDominates, float dryMul) {
         std::scoped_lock l(_mtx);
 
         for (auto it = wd.extSources.begin(); it != wd.extSources.end();) {
@@ -1383,26 +1386,39 @@ namespace SWE {
             ++it;
         }
 
+        if (!wd.simInit) {
+            for (int i = 0; i < 4; ++i) wd.simCat[i] = wd.lastAppliedCat[i];
+            wd.simInit = true;
+        }
+
         // Important: Environmental wetness sources override everything else
         if (envDominates) {
             for (int i = 0; i < 4; ++i) {
                 wd.activeOv[i] = {};
                 outWetByCat[i] = baseWet;
+                wd.simCat[i] = baseWet;
             }
+            wd.simInit = true;
             return;
         }
 
-        const float prevMax = std::max(std::max(wd.lastAppliedCat[0], wd.lastAppliedCat[1]),
-                                       std::max(wd.lastAppliedCat[2], wd.lastAppliedCat[3]));
-        const float delta = baseWet - prevMax;
+        float last[4] = {wd.lastAppliedCat[0], wd.lastAppliedCat[1], wd.lastAppliedCat[2], wd.lastAppliedCat[3]};
+        float baseByCat[4] = {wd.simCat[0], wd.simCat[1], wd.simCat[2], wd.simCat[3]};
 
-        float baseByCat[4];
-        for (int i = 0; i < 4; ++i) {
-            wd.activeOv[i] = {};
-            baseByCat[i] = clampf(wd.lastAppliedCat[i] + delta, 0.f, 1.f);
-            outWetByCat[i] = baseByCat[i];
-        }
-        if (wd.extSources.empty()) return;
+        auto dryStep = [&](float secs) -> float {
+            const float r = (secs > 0.01f) ? (1.f / secs) : 1.f;
+            return r * dryMul * dt;
+        };
+
+        const float secSkin = Settings::secondsToDrySkin.load();
+        const float secHair = Settings::secondsToDryHair.load();
+        const float secArmor = Settings::secondsToDryArmor.load();
+        const float secWeap = Settings::secondsToDryWeapon.load();
+
+        baseByCat[0] = clampf(baseByCat[0] - dryStep(secSkin), 0.f, 1.f);
+        baseByCat[1] = clampf(baseByCat[1] - dryStep(secHair), 0.f, 1.f);
+        baseByCat[2] = clampf(baseByCat[2] - dryStep(secArmor), 0.f, 1.f);
+        baseByCat[3] = clampf(baseByCat[3] - dryStep(secWeap), 0.f, 1.f);
 
         float passthrough[4] = {0.f, 0.f, 0.f, 0.f};
         bool zeroBase[4] = {false, false, false, false};
@@ -1436,11 +1452,13 @@ namespace SWE {
                 }
         }
 
+        // ZERO_BASE / NO_AUTODRY
+        const bool isDrying = !envDominates;
         for (int ci = 0; ci < 4; ++ci) {
             if (zeroBase[ci]) {
                 baseByCat[ci] = 0.f;
-            } else if (noAutoDry[ci] && delta < 0.f) {
-                baseByCat[ci] = wd.lastAppliedCat[ci];
+            } else if (noAutoDry[ci] && isDrying) {
+                baseByCat[ci] = last[ci];
             }
         }
 
@@ -1473,6 +1491,7 @@ namespace SWE {
 
         for (int ci = 0; ci < 4; ++ci) {
             outWetByCat[ci] = clampf(blendOne(ci) + passthrough[ci], 0.f, 1.f);
+            wd.simCat[ci] = outWetByCat[ci];
         }
     }
 

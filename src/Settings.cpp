@@ -29,7 +29,10 @@ namespace Settings {
     std::atomic<float> secondsToSoakWater{2.0f};
     std::atomic<float> secondsToSoakRain{36.0f};
     std::atomic<float> secondsToSoakSnow{48.0f};
-    std::atomic<float> secondsToDry{25.0f};
+    std::atomic<float> secondsToDrySkin{40.0f};
+    std::atomic<float> secondsToDryHair{40.0f};
+    std::atomic<float> secondsToDryArmor{40.0f};
+    std::atomic<float> secondsToDryWeapon{40.0f};
     std::atomic<float> minSubmergeToSoak{0.5f};
 
     std::atomic<float> glossinessBoost{120.0f};
@@ -190,7 +193,22 @@ namespace Settings {
             apply_if(j, "secondsToSoakRain", secondsToSoakRain);
             apply_if(j, "secondsToSoakSnow", secondsToSoakSnow);
 
-            apply_if(j, "secondsToDry", secondsToDry);
+            if (j.contains("secondsToDrySkin") || j.contains("secondsToDryHair") || j.contains("secondsToDryArmor") ||
+                j.contains("secondsToDryWeapon")) {
+                apply_if(j, "secondsToDrySkin", secondsToDrySkin);
+                apply_if(j, "secondsToDryHair", secondsToDryHair);
+                apply_if(j, "secondsToDryArmor", secondsToDryArmor);
+                apply_if(j, "secondsToDryWeapon", secondsToDryWeapon);
+            } else if (j.contains("secondsToDry")) {
+                try {
+                    float legacy = j.at("secondsToDry").get<float>();
+                    secondsToDrySkin.store(legacy);
+                    secondsToDryHair.store(legacy);
+                    secondsToDryArmor.store(legacy);
+                    secondsToDryWeapon.store(legacy);
+                } catch (...) {
+                }
+            }
             apply_if(j, "minSubmergeToSoak", minSubmergeToSoak);
 
             apply_if(j, "glossinessBoost", glossinessBoost);
@@ -262,7 +280,10 @@ namespace Settings {
                       {"secondsToSoakWater", secondsToSoakWater.load()},
                       {"secondsToSoakRain", secondsToSoakRain.load()},
                       {"secondsToSoakSnow", secondsToSoakRain.load()},
-                      {"secondsToDry", secondsToDry.load()},
+                      {"secondsToDrySkin", secondsToDrySkin.load()},
+                      {"secondsToDryHair", secondsToDryHair.load()},
+                      {"secondsToDryArmor", secondsToDryArmor.load()},
+                      {"secondsToDryWeapon", secondsToDryWeapon.load()},
                       {"minSubmergeToSoak", minSubmergeToSoak.load()},
 
                       {"glossinessBoost", glossinessBoost.load()},
@@ -324,7 +345,10 @@ namespace Settings {
         secondsToSoakWater.store(2.0f);
         secondsToSoakRain.store(36.0f);
         secondsToSoakSnow.store(48.0f);
-        secondsToDry.store(40.0f);
+        secondsToDrySkin.store(40.0f);
+        secondsToDryHair.store(40.0f);
+        secondsToDryArmor.store(40.0f);
+        secondsToDryWeapon.store(40.0f);
         minSubmergeToSoak.store(0.5f);
 
         glossinessBoost.store(120.0f);

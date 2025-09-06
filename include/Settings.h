@@ -32,7 +32,10 @@ namespace Settings {
     extern std::atomic<float> secondsToSoakWater;
     extern std::atomic<float> secondsToSoakRain;
     extern std::atomic<float> secondsToSoakSnow;
-    extern std::atomic<float> secondsToDry;
+    extern std::atomic<float> secondsToDrySkin;
+    extern std::atomic<float> secondsToDryHair;
+    extern std::atomic<float> secondsToDryArmor;
+    extern std::atomic<float> secondsToDryWeapon;
     extern std::atomic<float> minSubmergeToSoak;
 
     extern std::atomic<float> glossinessBoost;      // added to original glossiness * wetness

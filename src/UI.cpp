@@ -196,7 +196,10 @@ namespace {
         Settings::maxSpecularStrength.store(5.0f);
         Settings::secondsToSoakRain.store(60.0f);
         Settings::secondsToSoakSnow.store(std::round(Settings::secondsToSoakRain.load() * 1.25f));
-        Settings::secondsToDry.store(45.0f);
+        Settings::secondsToDrySkin.store(45.0f);
+        Settings::secondsToDryHair.store(45.0f);
+        Settings::secondsToDryArmor.store(45.0f);
+        Settings::secondsToDryWeapon.store(45.0f);
         Settings::pbrFriendlyMode.store(true);
         Settings::pbrArmorWeapMul.store(0.35f);
         Settings::pbrMaxGlossArmor.store(260.0f);
@@ -210,7 +213,10 @@ namespace {
         Settings::maxSpecularStrength.store(10.0f);
         Settings::secondsToSoakRain.store(36.0f);
         Settings::secondsToSoakSnow.store(std::round(Settings::secondsToSoakRain.load() * 1.25f));
-        Settings::secondsToDry.store(40.0f);
+        Settings::secondsToDrySkin.store(40.0f);
+        Settings::secondsToDryHair.store(40.0f);
+        Settings::secondsToDryArmor.store(40.0f);
+        Settings::secondsToDryWeapon.store(40.0f);
         Settings::pbrFriendlyMode.store(false);
         Settings::pbrArmorWeapMul.store(0.5f);
         Settings::pbrMaxGlossArmor.store(300.0f);
@@ -367,10 +373,28 @@ void __stdcall UI::WetConfig::RenderSources() {
             }
         }
         {
-            float d = Settings::secondsToDry.load();
-            if (FloatControl("Seconds to dry", d, 2.0f, 7200.0f, "%.0f", 5.0f, 30.0f,
-                             "Time from 100% -> 0% wetness (without fire/heat boost).")) {
-                Settings::secondsToDry.store(d);
+            float ds = Settings::secondsToDrySkin.load();
+            if (FloatControl("Seconds to dry (Skin/Face)", ds, 2.0f, 7200.0f, "%.0f", 5.0f, 30.0f,
+                             "Drying time for skin/face category (100% -> 0% without heat).")) {
+                Settings::secondsToDrySkin.store(ds);
+            }
+        }
+        {
+            float dh = Settings::secondsToDryHair.load();
+            if (FloatControl("Seconds to dry (Hair)", dh, 2.0f, 7200.0f, "%.0f", 5.0f, 30.0f)) {
+                Settings::secondsToDryHair.store(dh);
+            }
+        }
+        {
+            float da = Settings::secondsToDryArmor.load();
+            if (FloatControl("Seconds to dry (Armor/Cloth)", da, 2.0f, 7200.0f, "%.0f", 5.0f, 30.0f)) {
+                Settings::secondsToDryArmor.store(da);
+            }
+        }
+        {
+            float dw = Settings::secondsToDryWeapon.load();
+            if (FloatControl("Seconds to dry (Weapons)", dw, 2.0f, 7200.0f, "%.0f", 5.0f, 30.0f)) {
+                Settings::secondsToDryWeapon.store(dw);
             }
         }
 
