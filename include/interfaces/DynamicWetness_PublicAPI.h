@@ -58,12 +58,12 @@ namespace SWE {
         /**
          * @brief Flags that modify how SWE blends your external wetness with its internal system.
          *
-         * These live in the upper bits of the same integer you pass as “catMask”.
+         * These live in the upper bits of the same integer you pass as "catMask".
          * You can OR them together with category bits.
          */
         static constexpr std::uint32_t FLAG_PASSTHROUGH =
-            1u << 16;  /// Add AFTER SWE’s own mixing/drying (additive post).
-        static constexpr std::uint32_t FLAG_NO_AUTODRY = 1u << 17;  /// Your value won’t be reduced by SWE’s auto-dry.
+            1u << 16;  /// Add AFTER SWE's own mixing/drying (additive post).
+        static constexpr std::uint32_t FLAG_NO_AUTODRY = 1u << 17;  /// Your value won't be reduced by SWE's auto-dry.
         static constexpr std::uint32_t FLAG_ZERO_BASE = 1u << 18;  /// Base wetness in the marked categories is zeroed.
 
         /// @brief Handy preset: only Skin, additive post, no auto-dry, zero base contribution.
@@ -74,7 +74,7 @@ namespace SWE {
         // Environment bit mask
         // ===========================
         /**
-         * @brief Bits returned by GetEnvMask() describing the actor’s environment this frame.
+         * @brief Bits returned by GetEnvMask() describing the actor's environment this frame.
          */
         static constexpr std::uint32_t ENV_WATER = 1u << 0;          /// Actor is in water/submerged.
         static constexpr std::uint32_t ENV_WET_WEATHER = 1u << 1;    /// Precipitation affecting actor (rain/snow).
@@ -214,7 +214,7 @@ namespace SWE {
         // ===========================
 
         /**
-         * @brief Final wetness after SWE’s internal logic + all external sources.
+         * @brief Final wetness after SWE's internal logic + all external sources.
          * @param a Actor pointer
          * @return Wetness in [0..1]. Returns 0 if SWE is not available.
          */
@@ -283,7 +283,7 @@ namespace SWE {
          *
          * Use this to tweak how shiny/specular the result can get per category while keeping
          * your previously set flags (e.g., NO_AUTODRY) intact. Parameters use negative
-         * values to mean “leave unchanged / don’t force”.
+         * values to mean "leave unchanged / don't force".
          *
          * @param a Actor
          * @param key Your unique source key (normalized internal storage)
@@ -325,7 +325,7 @@ namespace SWE {
         }
         /// @brief True if the actor is detected to be under a roof/cover.
         inline bool IsUnderRoof(RE::Actor* a) { return pIsUnderRoof ? pIsUnderRoof(a) : false; }
-        /// @brief True if actor is in “exterior wet” area (outside & exposed).
+        /// @brief True if actor is in "exterior wet" area (outside & exposed).
         inline bool IsActorInExteriorWet(RE::Actor* a) {
             return pIsActorInExteriorWet ? pIsActorInExteriorWet(a) : false;
         }
