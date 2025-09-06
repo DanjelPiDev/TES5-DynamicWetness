@@ -1,4 +1,3 @@
-// DynamicWetness_PublicAPI.h
 // Public, header-only C/C++ interface for DynamicWetness (SWE namespace)
 // Drop-in for other SKSE plugins, no import lib required (functions are resolved via GetProcAddress).
 //
