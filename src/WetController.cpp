@@ -134,7 +134,29 @@ namespace SWE {
         };
         return hasEyes(RE::BSTextureSet::Texture::kDiffuse) || hasEyes(RE::BSTextureSet::Texture::kNormal);
     }
-
+    static RE::BSLightingShaderProperty* FindLightingProp(RE::BSGeometry* g) {
+        if (!g) return nullptr;
+        auto& rdata = g->GetGeometryRuntimeData();
+        for (auto& p : rdata.properties) {
+            if (!p) continue;
+            if (auto* l = skyrim_cast<RE::BSLightingShaderProperty*>(p.get())) return l;
+        }
+        return nullptr;
+    }
+    static std::uint32_t ComputeGeomStamp(RE::NiAVObject* root) {
+        if (!root) return 0;
+        std::uint64_t acc = 1469598103934665603ull;
+        std::uint32_t cnt = 0;
+        ForEachGeometry(root, [&](RE::BSGeometry* g) {
+            if (auto* l = FindLightingProp(g)) {
+                ++cnt;
+                acc ^= reinterpret_cast<std::uintptr_t>(l);
+                acc *= 1099511628211ull;
+            }
+        });
+        return static_cast<std::uint32_t>(cnt) ^ static_cast<std::uint32_t>(acc) ^
+               static_cast<std::uint32_t>(acc >> 32);
+    }
     static bool IsEyeGeometry(RE::BSGeometry* g, RE::BSLightingShaderProperty* lsp) {
         if (!g) return false;
         if (LooksLikeEyeName(g)) return true;
@@ -487,15 +509,6 @@ namespace SWE {
         }
 
         return MatCat::ArmorClothing;
-    }
-    static RE::BSLightingShaderProperty* FindLightingProp(RE::BSGeometry* g) {
-        if (!g) return nullptr;
-        auto& rdata = g->GetGeometryRuntimeData();
-        for (auto& p : rdata.properties) {
-            if (!p) continue;
-            if (auto* l = skyrim_cast<RE::BSLightingShaderProperty*>(p.get())) return l;
-        }
-        return nullptr;
     }
     static inline std::uint32_t MakeFilterInfo(RE::COL_LAYER layer, std::uint16_t systemGroup = 0xFFFF,
                                                std::uint8_t subSystemId = 0, std::uint8_t subSystemNoCollide = 0) {
@@ -1259,12 +1272,34 @@ namespace SWE {
             }
         } else {
             bool anyChange = false;
-            for (int i = 0; i < 4; ++i)
+            for (int i = 0; i < 4; ++i) {
                 if (std::abs(wd.lastAppliedCat[i] - wetByCat[i]) > 0.0025f) {
                     anyChange = true;
                     break;
                 }
-            if (anyChange) {
+            }
+
+            bool geomChanged = false;
+            if (!anyChange) {
+                const auto now = std::chrono::steady_clock::now();
+                if (wd.lastGeomProbe.time_since_epoch().count() == 0 || (now - wd.lastGeomProbe) > 250ms) {
+                    RE::NiAVObject* third = a->Get3D();
+                    RE::NiAVObject* first = nullptr;
+                    if (a->IsPlayerRef() && third) {
+                        first = third->GetObjectByName("1st Person");
+                        if (!first) first = third->GetObjectByName("1stPerson");
+                    }
+                    std::uint32_t stamp = 0;
+                    if (third) stamp ^= ComputeGeomStamp(third);
+                    if (first) stamp ^= ComputeGeomStamp(first);
+
+                    geomChanged = (stamp != wd.lastGeomStamp);
+                    wd.lastGeomStamp = stamp;
+                    wd.lastGeomProbe = now;
+                }
+            }
+
+            if (anyChange || geomChanged) {
                 ApplyWetnessMaterials(a, wetByCat);
                 for (int i = 0; i < 4; ++i) wd.lastAppliedCat[i] = wetByCat[i];
                 wd.lastAppliedWet = wFinal;
