@@ -186,6 +186,41 @@ namespace SWE {
 
         return false;
     }
+
+    static bool LooksLikeWorkFurniture(const RE::TESObjectREFR* r) {
+        if (!r) return false;
+        const auto lc = [](std::string s) {
+            std::transform(s.begin(), s.end(), s.begin(), ::tolower);
+            return s;
+        };
+
+        const char* ed = r->GetBaseObject() ? r->GetBaseObject()->GetFormEditorID() : nullptr;
+        std::string name = lc(ed ? ed : "");
+        const char* keys[] = {"workbench", "forge",   "smelter", "grindstone", "tanning",
+                              "alchemy",   "enchant", "cooking", "chopping",   "choppingblock",
+                              "sawmill",   "mine",    "mining",  "ore",        "blacksmith"};
+        for (auto* k : keys)
+            if (name.find(k) != std::string::npos) return true;
+        return false;
+    }
+
+    static RE::TESObjectREFR* ToRefPtr(const RE::NiPointer<RE::TESObjectREFR>& p) { return p.get(); }
+
+    static RE::TESObjectREFR* ToRefPtr(const RE::ObjectRefHandle& h) {
+        auto np = h.get();
+        return np ? np.get() : nullptr;
+    }
+
+    static bool IsActorWorkingFurniture(const RE::Actor* a) {
+        if (!a) return false;
+
+        const auto occ = a->GetOccupiedFurniture();
+        RE::TESObjectREFR* ref = ToRefPtr(occ);
+        if (!ref) return false;
+
+        return LooksLikeWorkFurniture(ref);
+    }
+
     static bool MostlyParticleOrEffect(const RE::NiAVObject* root) {
         if (!root) return false;
         int particles = 0, lighting = 0;
@@ -1104,6 +1139,84 @@ namespace SWE {
             if (precipRain) inc = std::max(inc, soakRainRate * dt);
             if (precipSnow) inc = std::max(inc, soakSnowRate * dt);
             w += inc;
+        }
+
+        {
+            const bool actEnabled = Settings::activityWetEnabled.load();
+            const int actMask = (Settings::activityCatMask.load() & 0x0F);
+
+            bool condRun = false;
+            bool condSneak = false;
+            bool condWork = false;
+
+            if (actEnabled && actMask != 0) {
+                if (Settings::activityTriggerRunning.load()) {
+                    condRun = a->IsRunning() && !inWater;
+                }
+                if (Settings::activityTriggerSneaking.load()) {
+                    condSneak = a->IsSneaking() && !inWater;
+                }
+                if (Settings::activityTriggerWorking.load()) {
+                    condWork = IsActorWorkingFurniture(a) && !inWater;
+                    if (!condWork && a->IsPlayerRef()) {
+                        if (auto* ui = RE::UI::GetSingleton()) {
+                            condWork = ui->IsMenuOpen("Crafting Menu") || ui->IsMenuOpen("Alchemy Menu") ||
+                                       ui->IsMenuOpen("Enchanting Menu") || ui->IsMenuOpen("Cooking Menu");
+                        }
+                    }
+                }
+
+                const bool anyAct = condRun || condSneak || condWork;
+
+                const float upRate = (Settings::secondsToSoakActivity.load() > 0.01f)
+                                         ? (1.f / Settings::secondsToSoakActivity.load())
+                                         : 1.f;
+                const float downRate = (Settings::secondsToDryActivity.load() > 0.01f)
+                                           ? (1.f / Settings::secondsToDryActivity.load())
+                                           : 1.f;
+
+                if (anyAct && !envDominates) {
+                    wd.activityLevel = clampf(wd.activityLevel + upRate * dt, 0.f, 1.f);
+                } else {
+                    wd.activityLevel = clampf(wd.activityLevel - downRate * dt, 0.f, 1.f);
+                }
+
+                if (wd.activityLevel > 0.0005f) {
+                    auto& src = wd.extSources["__activity"];
+                    src.value = wd.activityLevel;
+                    src.expiryRemainingSec = -1.f;
+                    src.catMask = static_cast<std::uint8_t>(actMask);
+                    src.flags = 0;
+                } else {
+                    wd.extSources.erase("__activity");
+                }
+            } else {
+                wd.activityLevel = 0.f;
+                wd.extSources.erase("__activity");
+            }
+        }
+
+        auto purgeActivity = [&]() {
+            wd.activityLevel = 0.0f;
+            auto it = wd.extSources.find("__activity");
+            if (it != wd.extSources.end()) {
+                wd.extSources.erase(it);
+            }
+        };
+
+        if (envDominates) {
+            purgeActivity();
+        }
+
+        bool hasOtherExternal = std::any_of(wd.extSources.begin(), wd.extSources.end(), [](const auto& kv) {
+            const auto& key = kv.first;
+            const auto& src = kv.second;
+            if (key == "__activity") return false;
+            if (src.expiryRemainingSec == 0.f) return false;
+            return src.value > 0.f && (src.catMask & SWE::Papyrus::SWE_CAT_MASK_4BIT) != 0;
+        });
+        if (hasOtherExternal) {
+            purgeActivity();
         }
 
         w = clampf(w, 0.f, 1.f);

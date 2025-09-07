@@ -449,6 +449,62 @@ void __stdcall UI::WetConfig::RenderSources() {
         }
 
         ImGui::Separator();
+
+        SubHeader("Activity (Running / Sneaking / Working)");
+        {
+            bool en = Settings::activityWetEnabled.load();
+            if (ImGui::Checkbox("Enable Activity-based Wetness (sweat)", &en)) Settings::activityWetEnabled.store(en);
+            ImGui::TextDisabled("Triggers add wetness independent of rain/water (default: Skin only).");
+
+            // Trigger toggles
+            bool tRun = Settings::activityTriggerRunning.load();
+            bool tSneak = Settings::activityTriggerSneaking.load();
+            bool tWork = Settings::activityTriggerWorking.load();
+
+            ImGui::Checkbox("Trigger on Running", &tRun);
+            ImGui::SameLine();
+            ImGui::Checkbox("Trigger on Sneaking", &tSneak);
+            ImGui::SameLine();
+            ImGui::Checkbox("Trigger on Working (crafting/furniture)", &tWork);
+
+            if (tRun != Settings::activityTriggerRunning.load()) Settings::activityTriggerRunning.store(tRun);
+            if (tSneak != Settings::activityTriggerSneaking.load()) Settings::activityTriggerSneaking.store(tSneak);
+            if (tWork != Settings::activityTriggerWorking.load()) Settings::activityTriggerWorking.store(tWork);
+
+            // Category mask (Bitfield)
+            ImGui::TextDisabled("Categories (bitmask) affected by Activity:");
+            int m = Settings::activityCatMask.load() & 0x0F;
+            bool mSkin = (m & 0x01) != 0;
+            bool mHair = (m & 0x02) != 0;
+            bool mArmor = (m & 0x04) != 0;
+            bool mWeap = (m & 0x08) != 0;
+
+            ImGui::Checkbox("Skin/Face##act", &mSkin);
+            ImGui::SameLine();
+            ImGui::Checkbox("Hair##act", &mHair);
+            ImGui::SameLine();
+            ImGui::Checkbox("Armor##act", &mArmor);
+            ImGui::SameLine();
+            ImGui::Checkbox("Weapons##act", &mWeap);
+
+            int newM = (mSkin ? 1 : 0) | (mHair ? 2 : 0) | (mArmor ? 4 : 0) | (mWeap ? 8 : 0);
+            if (newM != m) Settings::activityCatMask.store(newM);
+
+            {
+                float sa = Settings::secondsToSoakActivity.load();
+                if (FloatControl("Seconds to fully soak (Activity)", sa, 2.0f, 7200.0f, "%.0f", 5.0f, 30.0f,
+                                 "Time from 0% -> 100% wetness under continuous running/sneaking/working.")) {
+                    Settings::secondsToSoakActivity.store(sa);
+                }
+            }
+            {
+                float sd = Settings::secondsToDryActivity.load();
+                if (FloatControl("Seconds to dry (Activity share)", sd, 2.0f, 7200.0f, "%.0f", 5.0f, 30.0f,
+                                 "Drying time for activity-caused wetness when idle.")) {
+                    Settings::secondsToDryActivity.store(sd);
+                }
+            }
+        }
         SaveResetRow();
     }
     FontAwesome::Pop();

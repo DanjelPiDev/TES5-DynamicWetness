@@ -65,6 +65,16 @@ namespace Settings {
     std::atomic<float> pbrMaxGlossArmor{300.0f};
     std::atomic<float> pbrMaxSpecArmor{5.0f};
 
+    std::atomic<bool> activityWetEnabled{false};
+    std::atomic<bool> activityTriggerRunning{true};
+    std::atomic<bool> activityTriggerSneaking{true};
+    std::atomic<bool> activityTriggerWorking{true};
+
+    std::atomic<int> activityCatMask{0x01};  // Skin only
+
+    std::atomic<float> secondsToSoakActivity{40.0f};  // 0->100% bei dauerhafter Aktivität
+    std::atomic<float> secondsToDryActivity{35.0f};
+
     std::vector<FormSpec> actorOverrides;
     std::vector<FormSpec> trackedActors;
     std::shared_mutex actorsMutex;
@@ -240,6 +250,30 @@ namespace Settings {
             apply_if(j, "pbrMaxGlossArmor", pbrMaxGlossArmor);
             apply_if(j, "pbrMaxSpecArmor", pbrMaxSpecArmor);
 
+            apply_if(j, "activityWetEnabled", activityWetEnabled);
+            apply_if(j, "activityTriggerRunning", activityTriggerRunning);
+            apply_if(j, "activityTriggerSneaking", activityTriggerSneaking);
+            apply_if(j, "activityTriggerWorking", activityTriggerWorking);
+
+            if (j.contains("activityCatMask")) {
+                try {
+                    if (j.at("activityCatMask").is_number_unsigned()) {
+                        int mv = static_cast<int>(j.at("activityCatMask").get<unsigned>());
+                        activityCatMask.store(mv & 0x0F);
+                    } else if (j.at("activityCatMask").is_string()) {
+                        std::string ms = j.at("activityCatMask").get<std::string>();
+                        if (ms.rfind("0x", 0) == 0 || ms.rfind("0X", 0) == 0) ms = ms.substr(2);
+                        unsigned mv = 0;
+                        auto res = std::from_chars(ms.data(), ms.data() + ms.size(), mv, 16);
+                        if (res.ec == std::errc()) activityCatMask.store(static_cast<int>(mv & 0x0F));
+                    }
+                } catch (...) {
+                }
+            }
+
+            apply_if(j, "secondsToSoakActivity", secondsToSoakActivity);
+            apply_if(j, "secondsToDryActivity", secondsToDryActivity);
+
             apply_if(j, "npcOptInOnly", npcOptInOnly);
             std::vector<FormSpec> aoTmp, taTmp;
             load_formspec_array(j, "actorOverrides", aoTmp);
@@ -315,6 +349,15 @@ namespace Settings {
                       {"pbrMaxGlossArmor", pbrMaxGlossArmor.load()},
                       {"pbrMaxSpecArmor", pbrMaxSpecArmor.load()},
 
+                      {"activityWetEnabled", activityWetEnabled.load()},
+                      {"activityTriggerRunning", activityTriggerRunning.load()},
+                      {"activityTriggerSneaking", activityTriggerSneaking.load()},
+                      {"activityTriggerWorking", activityTriggerWorking.load()},
+                      {"activityCatMask", activityCatMask.load()},
+                      {"secondsToSoakActivity", secondsToSoakActivity.load()},
+                      {"secondsToDryActivity", secondsToDryActivity.load()},
+
+
                       {"updateIntervalMs", updateIntervalMs.load()}};
             auto ao = SnapshotActorOverrides();
             auto ta = SnapshotTrackedActors();
@@ -379,6 +422,15 @@ namespace Settings {
         pbrArmorWeapMul.store(0.5f);
         pbrMaxGlossArmor.store(300.0f);
         pbrMaxSpecArmor.store(5.0f);
+
+        activityWetEnabled.store(false);
+        activityTriggerRunning.store(true);
+        activityTriggerSneaking.store(true);
+        activityTriggerWorking.store(true);
+        activityCatMask.store(0x01);
+        secondsToSoakActivity.store(40.0f);
+        secondsToDryActivity.store(35.0f);
+
 
         {
             std::unique_lock lk(actorsMutex);

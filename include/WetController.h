@@ -104,6 +104,7 @@ namespace SWE {
             float lastAppliedCat[4]{-1.f, -1.f, -1.f, -1.f};
             float simCat[4] = {0.f, 0.f, 0.f, 0.f};
             bool simInit = false;
+            float activityLevel{0.f};
         };
 
         std::unordered_map<uint32_t, WetData> _wet;
