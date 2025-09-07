@@ -67,6 +67,10 @@ namespace Settings {
     extern std::atomic<float> pbrMaxGlossArmor;
     extern std::atomic<float> pbrMaxSpecArmor;
 
+    extern std::atomic<bool> pbrClearcoatOnWet;   // default false
+    extern std::atomic<float> pbrClearcoatScale;  // default 0.35f
+    extern std::atomic<float> pbrClearcoatSpec;
+
     // Activity-based wetness (sweat) – optional
     extern std::atomic<bool> activityWetEnabled;
     extern std::atomic<bool> activityTriggerRunning;

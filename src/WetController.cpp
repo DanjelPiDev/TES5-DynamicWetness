@@ -1456,6 +1456,18 @@ namespace SWE {
             float newScale = base.baseSpecularScale + wet * effScBoost * catMul;
             newScale = std::clamp(newScale, effMinSpec, effMaxSpec);
 
+            // PBR Clearcoat simulation on wetness for armor and weapons
+            if (wet > 0.0005f && pbrish && isArmorOrWeap && Settings::pbrClearcoatOnWet.load()) {
+                if (sp) SetSpecularEnabled(sp, true);
+                if ((mat->specularColor.red + mat->specularColor.green + mat->specularColor.blue) < 0.05f) {
+                    mat->specularColor = {Settings::pbrClearcoatSpec.load(), Settings::pbrClearcoatSpec.load(),
+                                          Settings::pbrClearcoatSpec.load()};
+                }
+                const float ccMul = std::clamp(Settings::pbrClearcoatScale.load(), 0.0f, 1.0f);
+                newScale = base.baseSpecularScale + (newScale - base.baseSpecularScale) * ccMul;
+                newGloss = base.baseSpecularPower + (newGloss - base.baseSpecularPower) * ccMul;
+            }
+
             if (pbrish && isArmorOrWeap) {
                 const float amul = std::clamp(Settings::pbrArmorWeapMul.load(), 0.0f, 1.0f);
                 const float pbrG = Settings::pbrMaxGlossArmor.load();

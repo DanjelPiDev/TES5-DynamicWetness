@@ -49,7 +49,6 @@ namespace Settings {
     std::atomic<float> waterfallDepthPad{64.0f};
     std::atomic<float> waterfallZPad{51.0f};
 
-
     std::atomic<int> externalBlendMode{0};
     std::atomic<float> externalAddWeight{0.5f};
 
@@ -64,6 +63,10 @@ namespace Settings {
     std::atomic<float> pbrArmorWeapMul{0.5f};
     std::atomic<float> pbrMaxGlossArmor{300.0f};
     std::atomic<float> pbrMaxSpecArmor{5.0f};
+
+    std::atomic<bool> pbrClearcoatOnWet{false};
+    std::atomic<float> pbrClearcoatScale{0.35f};
+    std::atomic<float> pbrClearcoatSpec{0.25f};
 
     std::atomic<bool> activityWetEnabled{false};
     std::atomic<bool> activityTriggerRunning{true};
@@ -250,6 +253,10 @@ namespace Settings {
             apply_if(j, "pbrMaxGlossArmor", pbrMaxGlossArmor);
             apply_if(j, "pbrMaxSpecArmor", pbrMaxSpecArmor);
 
+            apply_if(j, "pbrClearcoatOnWet", pbrClearcoatOnWet);
+            apply_if(j, "pbrClearcoatScale", pbrClearcoatScale);
+            apply_if(j, "pbrClearcoatSpec", pbrClearcoatSpec);
+
             apply_if(j, "activityWetEnabled", activityWetEnabled);
             apply_if(j, "activityTriggerRunning", activityTriggerRunning);
             apply_if(j, "activityTriggerSneaking", activityTriggerSneaking);
@@ -349,6 +356,10 @@ namespace Settings {
                       {"pbrMaxGlossArmor", pbrMaxGlossArmor.load()},
                       {"pbrMaxSpecArmor", pbrMaxSpecArmor.load()},
 
+                      {"pbrClearcoatOnWet", pbrClearcoatOnWet.load()},
+                      {"pbrClearcoatScale", pbrClearcoatScale.load()},
+                      {"pbrClearcoatSpec", pbrClearcoatSpec.load()},
+
                       {"activityWetEnabled", activityWetEnabled.load()},
                       {"activityTriggerRunning", activityTriggerRunning.load()},
                       {"activityTriggerSneaking", activityTriggerSneaking.load()},
@@ -385,13 +396,13 @@ namespace Settings {
         affectArmor.store(true);
         affectWeapons.store(true);
 
-        secondsToSoakWater.store(2.0f);
-        secondsToSoakRain.store(36.0f);
-        secondsToSoakSnow.store(48.0f);
-        secondsToDrySkin.store(40.0f);
-        secondsToDryHair.store(40.0f);
-        secondsToDryArmor.store(40.0f);
-        secondsToDryWeapon.store(40.0f);
+        secondsToSoakWater.store(6.0f);
+        secondsToSoakRain.store(1450.0f);
+        secondsToSoakSnow.store(2100.0f);
+        secondsToDrySkin.store(1600.0f);
+        secondsToDryHair.store(1900.0f);
+        secondsToDryArmor.store(2200.0f);
+        secondsToDryWeapon.store(2000.0f);
         minSubmergeToSoak.store(0.5f);
 
         glossinessBoost.store(120.0f);
@@ -403,13 +414,13 @@ namespace Settings {
 
         waterfallEnabled.store(false);
         secondsToSoakWaterfall.store(8.0f);
-        nearWaterfallRadius.store(640.0f);
+        nearWaterfallRadius.store(512.0f);
         waterfallWidthPad.store(45.0f);
         waterfallDepthPad.store(64.0f);
         waterfallZPad.store(51.0f);
 
         nearFireRadius.store(512.0f);
-        dryMultiplierNearFire.store(3.0f);
+        dryMultiplierNearFire.store(8.0f);
 
         externalBlendMode.store(0);
         externalAddWeight.store(0.5f);
@@ -422,6 +433,10 @@ namespace Settings {
         pbrArmorWeapMul.store(0.5f);
         pbrMaxGlossArmor.store(300.0f);
         pbrMaxSpecArmor.store(5.0f);
+
+        pbrClearcoatOnWet.store(false);
+        pbrClearcoatScale.store(0.35f);
+        pbrClearcoatSpec.store(0.25f);
 
         activityWetEnabled.store(false);
         activityTriggerRunning.store(true);
