@@ -1,4 +1,4 @@
-Scriptname DynamicWetness_PublicAPI Hidden
+Scriptname SWE Hidden
 ; ============================================================
 ; Dynamic Wetness - Public Papyrus API (for mod authors)
 ; ============================================================
