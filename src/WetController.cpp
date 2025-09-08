@@ -134,7 +134,29 @@ namespace SWE {
         };
         return hasEyes(RE::BSTextureSet::Texture::kDiffuse) || hasEyes(RE::BSTextureSet::Texture::kNormal);
     }
-
+    static RE::BSLightingShaderProperty* FindLightingProp(RE::BSGeometry* g) {
+        if (!g) return nullptr;
+        auto& rdata = g->GetGeometryRuntimeData();
+        for (auto& p : rdata.properties) {
+            if (!p) continue;
+            if (auto* l = skyrim_cast<RE::BSLightingShaderProperty*>(p.get())) return l;
+        }
+        return nullptr;
+    }
+    static std::uint32_t ComputeGeomStamp(RE::NiAVObject* root) {
+        if (!root) return 0;
+        std::uint64_t acc = 1469598103934665603ull;
+        std::uint32_t cnt = 0;
+        ForEachGeometry(root, [&](RE::BSGeometry* g) {
+            if (auto* l = FindLightingProp(g)) {
+                ++cnt;
+                acc ^= reinterpret_cast<std::uintptr_t>(l);
+                acc *= 1099511628211ull;
+            }
+        });
+        return static_cast<std::uint32_t>(cnt) ^ static_cast<std::uint32_t>(acc) ^
+               static_cast<std::uint32_t>(acc >> 32);
+    }
     static bool IsEyeGeometry(RE::BSGeometry* g, RE::BSLightingShaderProperty* lsp) {
         if (!g) return false;
         if (LooksLikeEyeName(g)) return true;
@@ -186,6 +208,41 @@ namespace SWE {
 
         return false;
     }
+
+    static bool LooksLikeWorkFurniture(const RE::TESObjectREFR* r) {
+        if (!r) return false;
+        const auto lc = [](std::string s) {
+            std::transform(s.begin(), s.end(), s.begin(), ::tolower);
+            return s;
+        };
+
+        const char* ed = r->GetBaseObject() ? r->GetBaseObject()->GetFormEditorID() : nullptr;
+        std::string name = lc(ed ? ed : "");
+        const char* keys[] = {"workbench", "forge",   "smelter", "grindstone", "tanning",
+                              "alchemy",   "enchant", "cooking", "chopping",   "choppingblock",
+                              "sawmill",   "mine",    "mining",  "ore",        "blacksmith"};
+        for (auto* k : keys)
+            if (name.find(k) != std::string::npos) return true;
+        return false;
+    }
+
+    static RE::TESObjectREFR* ToRefPtr(const RE::NiPointer<RE::TESObjectREFR>& p) { return p.get(); }
+
+    static RE::TESObjectREFR* ToRefPtr(const RE::ObjectRefHandle& h) {
+        auto np = h.get();
+        return np ? np.get() : nullptr;
+    }
+
+    static bool IsActorWorkingFurniture(const RE::Actor* a) {
+        if (!a) return false;
+
+        const auto occ = a->GetOccupiedFurniture();
+        RE::TESObjectREFR* ref = ToRefPtr(occ);
+        if (!ref) return false;
+
+        return LooksLikeWorkFurniture(ref);
+    }
+
     static bool MostlyParticleOrEffect(const RE::NiAVObject* root) {
         if (!root) return false;
         int particles = 0, lighting = 0;
@@ -452,15 +509,6 @@ namespace SWE {
         }
 
         return MatCat::ArmorClothing;
-    }
-    static RE::BSLightingShaderProperty* FindLightingProp(RE::BSGeometry* g) {
-        if (!g) return nullptr;
-        auto& rdata = g->GetGeometryRuntimeData();
-        for (auto& p : rdata.properties) {
-            if (!p) continue;
-            if (auto* l = skyrim_cast<RE::BSLightingShaderProperty*>(p.get())) return l;
-        }
-        return nullptr;
     }
     static inline std::uint32_t MakeFilterInfo(RE::COL_LAYER layer, std::uint16_t systemGroup = 0xFFFF,
                                                std::uint8_t subSystemId = 0, std::uint8_t subSystemNoCollide = 0) {
@@ -1106,6 +1154,84 @@ namespace SWE {
             w += inc;
         }
 
+        {
+            const bool actEnabled = Settings::activityWetEnabled.load();
+            const int actMask = (Settings::activityCatMask.load() & 0x0F);
+
+            bool condRun = false;
+            bool condSneak = false;
+            bool condWork = false;
+
+            if (actEnabled && actMask != 0) {
+                if (Settings::activityTriggerRunning.load()) {
+                    condRun = a->IsRunning() && !inWater;
+                }
+                if (Settings::activityTriggerSneaking.load()) {
+                    condSneak = a->IsSneaking() && !inWater;
+                }
+                if (Settings::activityTriggerWorking.load()) {
+                    condWork = IsActorWorkingFurniture(a) && !inWater;
+                    if (!condWork && a->IsPlayerRef()) {
+                        if (auto* ui = RE::UI::GetSingleton()) {
+                            condWork = ui->IsMenuOpen("Crafting Menu") || ui->IsMenuOpen("Alchemy Menu") ||
+                                       ui->IsMenuOpen("Enchanting Menu") || ui->IsMenuOpen("Cooking Menu");
+                        }
+                    }
+                }
+
+                const bool anyAct = condRun || condSneak || condWork;
+
+                const float upRate = (Settings::secondsToSoakActivity.load() > 0.01f)
+                                         ? (1.f / Settings::secondsToSoakActivity.load())
+                                         : 1.f;
+                const float downRate = (Settings::secondsToDryActivity.load() > 0.01f)
+                                           ? (1.f / Settings::secondsToDryActivity.load())
+                                           : 1.f;
+
+                if (anyAct && !envDominates) {
+                    wd.activityLevel = clampf(wd.activityLevel + upRate * dt, 0.f, 1.f);
+                } else {
+                    wd.activityLevel = clampf(wd.activityLevel - downRate * dt, 0.f, 1.f);
+                }
+
+                if (wd.activityLevel > 0.0005f) {
+                    auto& src = wd.extSources["__activity"];
+                    src.value = wd.activityLevel;
+                    src.expiryRemainingSec = -1.f;
+                    src.catMask = static_cast<std::uint8_t>(actMask);
+                    src.flags = 0;
+                } else {
+                    wd.extSources.erase("__activity");
+                }
+            } else {
+                wd.activityLevel = 0.f;
+                wd.extSources.erase("__activity");
+            }
+        }
+
+        auto purgeActivity = [&]() {
+            wd.activityLevel = 0.0f;
+            auto it = wd.extSources.find("__activity");
+            if (it != wd.extSources.end()) {
+                wd.extSources.erase(it);
+            }
+        };
+
+        if (envDominates) {
+            purgeActivity();
+        }
+
+        bool hasOtherExternal = std::any_of(wd.extSources.begin(), wd.extSources.end(), [](const auto& kv) {
+            const auto& key = kv.first;
+            const auto& src = kv.second;
+            if (key == "__activity") return false;
+            if (src.expiryRemainingSec == 0.f) return false;
+            return src.value > 0.f && (src.catMask & SWE::Papyrus::SWE_CAT_MASK_4BIT) != 0;
+        });
+        if (hasOtherExternal) {
+            purgeActivity();
+        }
+
         w = clampf(w, 0.f, 1.f);
         // wd.baseWetness = w;
 
@@ -1146,12 +1272,34 @@ namespace SWE {
             }
         } else {
             bool anyChange = false;
-            for (int i = 0; i < 4; ++i)
+            for (int i = 0; i < 4; ++i) {
                 if (std::abs(wd.lastAppliedCat[i] - wetByCat[i]) > 0.0025f) {
                     anyChange = true;
                     break;
                 }
-            if (anyChange) {
+            }
+
+            bool geomChanged = false;
+            if (!anyChange) {
+                const auto now = std::chrono::steady_clock::now();
+                if (wd.lastGeomProbe.time_since_epoch().count() == 0 || (now - wd.lastGeomProbe) > 250ms) {
+                    RE::NiAVObject* third = a->Get3D();
+                    RE::NiAVObject* first = nullptr;
+                    if (a->IsPlayerRef() && third) {
+                        first = third->GetObjectByName("1st Person");
+                        if (!first) first = third->GetObjectByName("1stPerson");
+                    }
+                    std::uint32_t stamp = 0;
+                    if (third) stamp ^= ComputeGeomStamp(third);
+                    if (first) stamp ^= ComputeGeomStamp(first);
+
+                    geomChanged = (stamp != wd.lastGeomStamp);
+                    wd.lastGeomStamp = stamp;
+                    wd.lastGeomProbe = now;
+                }
+            }
+
+            if (anyChange || geomChanged) {
                 ApplyWetnessMaterials(a, wetByCat);
                 for (int i = 0; i < 4; ++i) wd.lastAppliedCat[i] = wetByCat[i];
                 wd.lastAppliedWet = wFinal;
@@ -1307,6 +1455,18 @@ namespace SWE {
 
             float newScale = base.baseSpecularScale + wet * effScBoost * catMul;
             newScale = std::clamp(newScale, effMinSpec, effMaxSpec);
+
+            // PBR Clearcoat simulation on wetness for armor and weapons
+            if (wet > 0.0005f && pbrish && isArmorOrWeap && Settings::pbrClearcoatOnWet.load()) {
+                if (sp) SetSpecularEnabled(sp, true);
+                if ((mat->specularColor.red + mat->specularColor.green + mat->specularColor.blue) < 0.05f) {
+                    mat->specularColor = {Settings::pbrClearcoatSpec.load(), Settings::pbrClearcoatSpec.load(),
+                                          Settings::pbrClearcoatSpec.load()};
+                }
+                const float ccMul = std::clamp(Settings::pbrClearcoatScale.load(), 0.0f, 1.0f);
+                newScale = base.baseSpecularScale + (newScale - base.baseSpecularScale) * ccMul;
+                newGloss = base.baseSpecularPower + (newGloss - base.baseSpecularPower) * ccMul;
+            }
 
             if (pbrish && isArmorOrWeap) {
                 const float amul = std::clamp(Settings::pbrArmorWeapMul.load(), 0.0f, 1.0f);
