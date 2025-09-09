@@ -194,16 +194,17 @@ namespace {
         Settings::skinHairResponseMul.store(2.0f);
         Settings::maxGlossiness.store(400.0f);
         Settings::maxSpecularStrength.store(5.0f);
-        Settings::secondsToSoakRain.store(60.0f);
+        Settings::secondsToSoakRain.store(1450.0f);
         Settings::secondsToSoakSnow.store(std::round(Settings::secondsToSoakRain.load() * 1.25f));
-        Settings::secondsToDrySkin.store(45.0f);
-        Settings::secondsToDryHair.store(45.0f);
-        Settings::secondsToDryArmor.store(45.0f);
-        Settings::secondsToDryWeapon.store(45.0f);
-        Settings::pbrFriendlyMode.store(true);
-        Settings::pbrArmorWeapMul.store(0.35f);
-        Settings::pbrMaxGlossArmor.store(260.0f);
-        Settings::pbrMaxSpecArmor.store(4.0f);
+        Settings::secondsToDrySkin.store(1600.0f);
+        Settings::secondsToDryHair.store(1900.0f);
+        Settings::secondsToDryArmor.store(2200.0f);
+        Settings::secondsToDryWeapon.store(2000.0f);
+        Settings::pbrClearcoatOnWet.store(false);
+        Settings::pbrFriendlyMode.store(false);
+        Settings::pbrArmorWeapMul.store(0.5f);
+        Settings::pbrMaxGlossArmor.store(300.0f);
+        Settings::pbrMaxSpecArmor.store(5.0f);
     }
     static void ApplyPreset_Balanced() {
         Settings::glossinessBoost.store(120.0f);
@@ -211,12 +212,13 @@ namespace {
         Settings::skinHairResponseMul.store(5.0f);
         Settings::maxGlossiness.store(800.0f);
         Settings::maxSpecularStrength.store(10.0f);
-        Settings::secondsToSoakRain.store(36.0f);
+        Settings::secondsToSoakRain.store(1450.0f);
         Settings::secondsToSoakSnow.store(std::round(Settings::secondsToSoakRain.load() * 1.25f));
-        Settings::secondsToDrySkin.store(40.0f);
-        Settings::secondsToDryHair.store(40.0f);
-        Settings::secondsToDryArmor.store(40.0f);
-        Settings::secondsToDryWeapon.store(40.0f);
+        Settings::secondsToDrySkin.store(1600.0f);
+        Settings::secondsToDryHair.store(1900.0f);
+        Settings::secondsToDryArmor.store(2200.0f);
+        Settings::secondsToDryWeapon.store(2000.0f);
+        Settings::pbrClearcoatOnWet.store(false);
         Settings::pbrFriendlyMode.store(false);
         Settings::pbrArmorWeapMul.store(0.5f);
         Settings::pbrMaxGlossArmor.store(300.0f);
@@ -228,6 +230,7 @@ namespace {
         Settings::skinHairResponseMul.store(6.0f);
         Settings::maxGlossiness.store(1200.0f);
         Settings::maxSpecularStrength.store(15.0f);
+        Settings::pbrClearcoatOnWet.store(false);
         Settings::pbrFriendlyMode.store(false);
     }
     static void ApplyPreset_PBRFriendly() {
@@ -235,6 +238,9 @@ namespace {
         Settings::pbrArmorWeapMul.store(0.5f);
         Settings::pbrMaxGlossArmor.store(300.0f);
         Settings::pbrMaxSpecArmor.store(5.0f);
+        Settings::pbrClearcoatOnWet.store(true);
+        Settings::pbrClearcoatScale.store(0.35f);
+        Settings::pbrClearcoatSpec.store(0.25f);
 
         Settings::specularScaleBoost.store(std::min(6.0f, Settings::specularScaleBoost.load()));
         Settings::glossinessBoost.store(std::min(120.0f, Settings::glossinessBoost.load()));
@@ -449,6 +455,62 @@ void __stdcall UI::WetConfig::RenderSources() {
         }
 
         ImGui::Separator();
+
+        SubHeader("Activity (Running / Sneaking / Working)");
+        {
+            bool en = Settings::activityWetEnabled.load();
+            if (ImGui::Checkbox("Enable Activity-based Wetness (sweat)", &en)) Settings::activityWetEnabled.store(en);
+            ImGui::TextDisabled("Triggers add wetness independent of rain/water (default: Skin only).");
+
+            // Trigger toggles
+            bool tRun = Settings::activityTriggerRunning.load();
+            bool tSneak = Settings::activityTriggerSneaking.load();
+            bool tWork = Settings::activityTriggerWorking.load();
+
+            ImGui::Checkbox("Trigger on Running", &tRun);
+            ImGui::SameLine();
+            ImGui::Checkbox("Trigger on Sneaking", &tSneak);
+            ImGui::SameLine();
+            ImGui::Checkbox("Trigger on Working (crafting/furniture)", &tWork);
+
+            if (tRun != Settings::activityTriggerRunning.load()) Settings::activityTriggerRunning.store(tRun);
+            if (tSneak != Settings::activityTriggerSneaking.load()) Settings::activityTriggerSneaking.store(tSneak);
+            if (tWork != Settings::activityTriggerWorking.load()) Settings::activityTriggerWorking.store(tWork);
+
+            // Category mask (Bitfield)
+            ImGui::TextDisabled("Categories (bitmask) affected by Activity:");
+            int m = Settings::activityCatMask.load() & 0x0F;
+            bool mSkin = (m & 0x01) != 0;
+            bool mHair = (m & 0x02) != 0;
+            bool mArmor = (m & 0x04) != 0;
+            bool mWeap = (m & 0x08) != 0;
+
+            ImGui::Checkbox("Skin/Face##act", &mSkin);
+            ImGui::SameLine();
+            ImGui::Checkbox("Hair##act", &mHair);
+            ImGui::SameLine();
+            ImGui::Checkbox("Armor##act", &mArmor);
+            ImGui::SameLine();
+            ImGui::Checkbox("Weapons##act", &mWeap);
+
+            int newM = (mSkin ? 1 : 0) | (mHair ? 2 : 0) | (mArmor ? 4 : 0) | (mWeap ? 8 : 0);
+            if (newM != m) Settings::activityCatMask.store(newM);
+
+            {
+                float sa = Settings::secondsToSoakActivity.load();
+                if (FloatControl("Seconds to fully soak (Activity)", sa, 2.0f, 7200.0f, "%.0f", 5.0f, 30.0f,
+                                 "Time from 0% -> 100% wetness under continuous running/sneaking/working.")) {
+                    Settings::secondsToSoakActivity.store(sa);
+                }
+            }
+            {
+                float sd = Settings::secondsToDryActivity.load();
+                if (FloatControl("Seconds to dry (Activity share)", sd, 2.0f, 7200.0f, "%.0f", 5.0f, 30.0f,
+                                 "Drying time for activity-caused wetness when idle.")) {
+                    Settings::secondsToDryActivity.store(sd);
+                }
+            }
+        }
         SaveResetRow();
     }
     FontAwesome::Pop();
@@ -576,6 +638,24 @@ void __stdcall UI::WetConfig::RenderMaterials() {
                     if (FloatControl("PBR Max Specular Strength (Armor/Weapons)", smx, 0.1f, 1000.0f, "%.2f", 0.1f,
                                      1.0f, "Extra clamp applied on armor/weapons in PBR mode.")) {
                         Settings::pbrMaxSpecArmor.store(smx);
+                    }
+                }
+                {
+                    bool cc = Settings::pbrClearcoatOnWet.load();
+                    if (ImGui::Checkbox("Add Clearcoat layer on wet Armor/Weapons", &cc)) {
+                        Settings::pbrClearcoatOnWet.store(cc);
+                    }
+                }
+                if (Settings::pbrClearcoatOnWet.load()) {
+                    float cs = Settings::pbrClearcoatScale.load();
+                    if (FloatControl("Clearcoat Scale", cs, 0.0f, 1.0f, "%.2f", 0.01f, 0.05f,
+                                     "Strength of the clearcoat layer added to wet armor/weapons.")) {
+                        Settings::pbrClearcoatScale.store(cs);
+                    }
+                    float csp = Settings::pbrClearcoatSpec.load();
+                    if (FloatControl("Clearcoat Specular", csp, 0.0f, 1.0f, "%.2f", 0.01f, 0.05f,
+                                     "Specular intensity of the clearcoat layer added to wet armor/weapons.")) {
+                        Settings::pbrClearcoatSpec.store(csp);
                     }
                 }
             }

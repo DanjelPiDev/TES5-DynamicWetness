@@ -67,6 +67,23 @@ namespace Settings {
     extern std::atomic<float> pbrMaxGlossArmor;
     extern std::atomic<float> pbrMaxSpecArmor;
 
+    extern std::atomic<bool> pbrClearcoatOnWet;   // default false
+    extern std::atomic<float> pbrClearcoatScale;  // default 0.35f
+    extern std::atomic<float> pbrClearcoatSpec;
+
+    // Activity-based wetness (sweat) – optional
+    extern std::atomic<bool> activityWetEnabled;
+    extern std::atomic<bool> activityTriggerRunning;
+    extern std::atomic<bool> activityTriggerSneaking;
+    extern std::atomic<bool> activityTriggerWorking;
+
+    // 4-bit cat mask (default: Skin only = 0x01)
+    extern std::atomic<int> activityCatMask;
+
+    // Soak/Dry times for activity wetness (independent von Rain/Water)
+    extern std::atomic<float> secondsToSoakActivity;
+    extern std::atomic<float> secondsToDryActivity;
+
     extern std::vector<FormSpec> actorOverrides;
     extern std::vector<FormSpec> trackedActors;
     extern std::shared_mutex actorsMutex;
