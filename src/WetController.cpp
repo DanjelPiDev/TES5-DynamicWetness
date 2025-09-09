@@ -1322,6 +1322,7 @@ namespace SWE {
             mat->specularPower = newGloss;
             mat->specularColor = newSpec;
             mat->specularColorScale = newScale;
+            mat->materialAlpha = base.baseAlpha;
 
             sp->SetMaterial(mat, true);
             lsp->DoClearRenderPasses();
