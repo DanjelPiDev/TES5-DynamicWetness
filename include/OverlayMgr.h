@@ -32,6 +32,7 @@ namespace SWE {
         bool HasInterfaces() const noexcept { return _ovl != nullptr; }
         bool HasOverlayInterface() const noexcept { return _ovl != nullptr; }
         bool HasActorUpdateIF() const noexcept { return _aum != nullptr; }
+        bool HasNiOverride() const { return _ni != nullptr; }
 
     private:
         OverlayMgr() = default;
@@ -61,6 +62,7 @@ namespace SWE {
 
         IOverlayInterface* _ovl{nullptr};
         IActorUpdateManager* _aum{nullptr};
+        IOverrideInterface* _ni = nullptr;
 
         bool _enabled{true};
         float _threshold{0.65f};
