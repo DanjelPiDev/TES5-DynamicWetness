@@ -78,6 +78,9 @@ namespace Settings {
     std::atomic<float> secondsToSoakActivity{40.0f};  // 0->100% bei dauerhafter Aktivität
     std::atomic<float> secondsToDryActivity{35.0f};
 
+    std::atomic<bool> overlayEnabled{true};
+    std::atomic<float> overlayThreshold{0.15f};
+
     std::vector<FormSpec> actorOverrides;
     std::vector<FormSpec> trackedActors;
     std::shared_mutex actorsMutex;
@@ -281,6 +284,9 @@ namespace Settings {
             apply_if(j, "secondsToSoakActivity", secondsToSoakActivity);
             apply_if(j, "secondsToDryActivity", secondsToDryActivity);
 
+            apply_if(j, "overlayEnabled", overlayEnabled);
+            apply_if(j, "overlayThreshold", overlayThreshold);
+
             apply_if(j, "npcOptInOnly", npcOptInOnly);
             std::vector<FormSpec> aoTmp, taTmp;
             load_formspec_array(j, "actorOverrides", aoTmp);
@@ -368,6 +374,8 @@ namespace Settings {
                       {"secondsToSoakActivity", secondsToSoakActivity.load()},
                       {"secondsToDryActivity", secondsToDryActivity.load()},
 
+                      {"overlayEnabled", overlayEnabled.load()},
+                      {"overlayThreshold", overlayThreshold.load()},
 
                       {"updateIntervalMs", updateIntervalMs.load()}};
             auto ao = SnapshotActorOverrides();
@@ -446,6 +454,8 @@ namespace Settings {
         secondsToSoakActivity.store(40.0f);
         secondsToDryActivity.store(35.0f);
 
+        overlayEnabled.store(true);
+        overlayThreshold.store(0.15f);
 
         {
             std::unique_lock lk(actorsMutex);

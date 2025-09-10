@@ -32,6 +32,7 @@ set(HEADERS
     include/nlohmann/json_fwd.hpp
     include/IPluginInterface.h
     include/PapyrusAPI.h
+    include/OverlayMgr.h
     include/utils/Utils.h
 )
 
@@ -42,6 +43,7 @@ set(SOURCES
     src/Settings.cpp
     src/UI.cpp
     src/PapyrusAPI.cpp
+    src/OverlayMgr.cpp
     src/utils/Utils.cpp
     ${CMAKE_CURRENT_BINARY_DIR}/version.rc
 )

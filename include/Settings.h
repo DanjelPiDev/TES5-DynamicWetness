@@ -84,6 +84,9 @@ namespace Settings {
     extern std::atomic<float> secondsToSoakActivity;
     extern std::atomic<float> secondsToDryActivity;
 
+    extern std::atomic<bool> overlayEnabled;
+    extern std::atomic<float> overlayThreshold;
+
     extern std::vector<FormSpec> actorOverrides;
     extern std::vector<FormSpec> trackedActors;
     extern std::shared_mutex actorsMutex;

@@ -13,7 +13,10 @@
 #include "RE/H/hkpWorldRayCastOutput.h"
 #include "RE/T/TESObjectCELL.h"
 #include "REL/Relocation.h"
+
+#include "OverlayMgr.h"
 #include "Settings.h"
+
 
 using namespace std::chrono_literals;
 
@@ -938,6 +941,8 @@ namespace SWE {
                                 (it->second.lastAppliedWet > 0.0005f || it->second.wetness > 0.0005f)) {
                                 const float zeros[4]{0, 0, 0, 0};
                                 ApplyWetnessMaterials(a, zeros);
+                                OverlayMgr::Get()->OnWetnessUpdate(a, 0.0f);
+
                                 it->second.wetness = 0.0f;
                                 it->second.lastAppliedWet = 0.0f;
                                 it->second.lastAppliedCat[0] = it->second.lastAppliedCat[1] =
@@ -953,6 +958,8 @@ namespace SWE {
                         if (it != _wet.end() && (it->second.lastAppliedWet > 0.0005f || it->second.wetness > 0.0005f)) {
                             const float zeros[4]{0, 0, 0, 0};
                             ApplyWetnessMaterials(a, zeros);
+                            OverlayMgr::Get()->OnWetnessUpdate(a, 0.0f);
+
                             it->second.wetness = 0.0f;
                             it->second.lastAppliedWet = 0.0f;
                             it->second.lastAppliedCat[0] = it->second.lastAppliedCat[1] = it->second.lastAppliedCat[2] =
@@ -970,6 +977,9 @@ namespace SWE {
                 }
             }
         }
+
+        SWE::OverlayMgr::Get()->SetEnabled(Settings::overlayEnabled.load());
+        SWE::OverlayMgr::Get()->SetThreshold(Settings::overlayThreshold.load());
     }
 
     void WetController::UpdateActorWetness(RE::Actor* a, float dt, const std::vector<Settings::FormSpec>& overrides, bool allowEnvWet, bool manualMode) {
@@ -1258,12 +1268,16 @@ namespace SWE {
         float wFinal = std::max(std::max(wetByCat[0], wetByCat[1]), std::max(wetByCat[2], wetByCat[3]));
         wd.wetness = wFinal;
 
+        OverlayMgr::Get()->OnWetnessUpdate(a, std::clamp(wetByCat[0], 0.0f, 1.0f));
+
         const float prevMax = std::max(std::max(wd.lastAppliedCat[0], wd.lastAppliedCat[1]),
                                        std::max(wd.lastAppliedCat[2], wd.lastAppliedCat[3]));
         if (wFinal <= 0.0005f) {
             if (prevMax > 0.0005f) {
                 const float zeros[4]{0, 0, 0, 0};
                 ApplyWetnessMaterials(a, zeros);
+                OverlayMgr::Get()->OnWetnessUpdate(a, 0.0f);
+
                 wd.lastAppliedCat[0] = wd.lastAppliedCat[1] = wd.lastAppliedCat[2] = wd.lastAppliedCat[3] = 0.f;
                 wd.lastAppliedWet = 0.0f;
 

@@ -612,6 +612,21 @@ void __stdcall UI::WetConfig::RenderMaterials() {
             }
         }
 
+        SubHeader("Overlays");
+        {
+            bool ov = Settings::overlayEnabled.load();
+            if (ImGui::Checkbox("Enable wetness overlays", &ov)) Settings::overlayEnabled.store(ov);
+            ImGui::TextDisabled("Place overlay textures in Data\\Textures\\DynamicWetness\\female|male\\body|hand");
+
+            if (ov) {
+                float th = Settings::overlayThreshold.load();
+                if (FloatControl("Overlay Threshold", th, 0.0f, 1.0f, "%.2f", 0.01f, 0.05f,
+                                 "Wetness level at which overlays appear.")) {
+                    Settings::overlayThreshold.store(th);
+                }
+            }
+        }
+
         // PBR area
         SubHeader("PBR (Armor/Weapons)");
         {

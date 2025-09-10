@@ -1,5 +1,6 @@
 ﻿#include "Main.h"
 #include "PapyrusAPI.h"
+#include "OverlayMgr.h"
 #include "utils/Utils.h"
 
 using namespace SKSE;
@@ -53,6 +54,41 @@ static void SetupLog() {
     spdlog::set_level(spdlog::level::trace);
     spdlog::flush_on(spdlog::level::info);
     spdlog::info("SkyrimWetEffect logging initialized (fallback path).");
+}
+
+static void RequestRMInterfaces() {
+    auto* mi = SKSE::GetMessagingInterface();
+    if (!mi) return;
+
+    InterfaceExchangeMessage ex{};
+    ex.interfaceMap = nullptr;
+
+    const char* receivers[] = {"skee", "SKEE", "NiOverride", "RaceMenu", nullptr };
+
+    for (auto* r : receivers) {
+        mi->Dispatch(InterfaceExchangeMessage::kMessage_ExchangeInterface, &ex, sizeof(ex), r);
+        if (ex.interfaceMap) break;
+    }
+
+    if (ex.interfaceMap) {
+        SWE::OverlayMgr::Get()->OnInterfaceMap(ex.interfaceMap);
+        spdlog::info("[SWE] RaceMenu interfaces acquired via InterfaceExchange (receiver ok)");
+    } else {
+        spdlog::warn("[SWE] OverlayMgr: No overlays interface available (InterfaceExchange returned null)");
+    }
+}
+
+static void OnSKSEMessage(SKSE::MessagingInterface::Message* msg) {
+    if (!msg || !msg->sender) return;
+
+    // RaceMenu/SKEE senden das Interface-Map-Event
+    const bool fromNiOverride = std::strcmp(msg->sender, "NiOverride") == 0 || std::strcmp(msg->sender, "SKEE") == 0 ||
+                                std::strcmp(msg->sender, "RaceMenu") == 0;
+
+    if (fromNiOverride && msg->type == InterfaceExchangeMessage::kMessage_ExchangeInterface && msg->data) {
+        auto* ex = static_cast<InterfaceExchangeMessage*>(msg->data);
+        SWE::OverlayMgr::Get()->OnInterfaceMap(ex->interfaceMap);
+    }
 }
 
 BOOL APIENTRY DllMain(HMODULE, DWORD, LPVOID) { return TRUE; }
@@ -200,6 +236,17 @@ extern "C" __declspec(dllexport) bool SKSEPlugin_Load(const SKSE::LoadInterface*
     }
 
     SKSE::GetMessagingInterface()->RegisterListener([](SKSE::MessagingInterface::Message* msg) {
+        if (!msg) return;
+
+        if (msg->sender && (std::strcmp(msg->sender, "NiOverride") == 0 || std::strcmp(msg->sender, "SKEE") == 0 ||
+                            std::strcmp(msg->sender, "RaceMenu") == 0)) {
+            if (msg->type == InterfaceExchangeMessage::kMessage_ExchangeInterface && msg->data) {
+                auto* ex = static_cast<InterfaceExchangeMessage*>(msg->data);
+                SWE::OverlayMgr::Get()->OnInterfaceMap(ex->interfaceMap);
+            }
+            return;
+        }
+
         auto* wc = SWE::WetController::GetSingleton();
         switch (msg->type) {
             case SKSE::MessagingInterface::kDataLoaded:
@@ -225,8 +272,8 @@ extern "C" __declspec(dllexport) bool SKSEPlugin_Load(const SKSE::LoadInterface*
             case SKSE::MessagingInterface::kPostLoadGame:
                 wc->OnPostLoadGame();
                 wc->Start();
+                if (!SWE::OverlayMgr::Get()->HasInterfaces()) RequestRMInterfaces();
                 break;
-
             default:
                 break;
         }
