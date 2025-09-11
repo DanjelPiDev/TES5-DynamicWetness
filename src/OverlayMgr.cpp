@@ -375,7 +375,8 @@ namespace SWE {
             if (auto it = _mergeCache.find(key); it != _mergeCache.end()) return it->second;
         }
 
-        auto fallbackWet = [&]() -> std::string {
+        auto fallbackWet = [&](const char* why) -> std::string {
+            spdlog::warn("[SWE] Merge: fallback ({}) -> using wet-only copy", why ? why : "unknown");
             std::filesystem::path src = "Data";
             src /= (wetSpec.rfind("textures/", 0) == 0 ? wetSpec : ("textures/" + wetSpec));
 
@@ -419,65 +420,65 @@ namespace SWE {
         DirectX::ScratchImage imgBase, imgWet;
         if (FAILED(DirectX::LoadFromDDSFile(toAbs(baseSpec).c_str(), DirectX::DDS_FLAGS_NONE, nullptr, imgBase))) {
             spdlog::warn("[SWE] Merge: failed to load base '{}', fallback to wet only", baseSpec);
-            return fallbackWet();
+            return fallbackWet("LoadFromDDS(base) failed");
         }
         if (FAILED(DirectX::LoadFromDDSFile(toAbs(wetSpec).c_str(), DirectX::DDS_FLAGS_NONE, nullptr, imgWet))) {
             spdlog::warn("[SWE] Merge: failed to load wet '{}', fallback to wet only", wetSpec);
-            return fallbackWet();
+            return fallbackWet("LoadFromDDS(wet) failed");
         }
 
         const DirectX::TexMetadata metaB = imgBase.GetMetadata();
         const DirectX::TexMetadata metaW = imgWet.GetMetadata();
 
         DirectX::ScratchImage baseLinear, wetLinear;
-        const DirectX::Image* bSrc = nullptr;
-        const DirectX::Image* wSrc = nullptr;
+        const DirectX::ScratchImage* baseSrc = &imgBase;
+        const DirectX::ScratchImage* wetSrc = &imgWet;
 
+        // BC/DXT -> RGBA8
         if (DirectX::IsCompressed(metaB.format)) {
-            if (FAILED(DirectX::Decompress(imgBase.GetImages(), imgBase.GetImageCount(), metaB, DXGI_FORMAT_UNKNOWN,
-                                           baseLinear))) {
-                spdlog::warn("[SWE] Merge: Decompress(base) failed, fallback");
-                return fallbackWet();
+            if (FAILED(DirectX::Decompress(imgBase.GetImages(), imgBase.GetImageCount(), metaB,
+                                           DXGI_FORMAT_R8G8B8A8_UNORM, baseLinear))) {
+                return fallbackWet("Decompress(base) failed");
             }
-            bSrc = baseLinear.GetImages();
-        } else {
-            bSrc = imgBase.GetImages();
+            baseSrc = &baseLinear;
         }
-
         if (DirectX::IsCompressed(metaW.format)) {
-            if (FAILED(DirectX::Decompress(imgWet.GetImages(), imgWet.GetImageCount(), metaW, DXGI_FORMAT_UNKNOWN,
-                                           wetLinear))) {
-                spdlog::warn("[SWE] Merge: Decompress(wet) failed, fallback");
-                return fallbackWet();
+            if (FAILED(DirectX::Decompress(imgWet.GetImages(), imgWet.GetImageCount(), metaW,
+                                           DXGI_FORMAT_R8G8B8A8_UNORM, wetLinear))) {
+                return fallbackWet("Decompress(wet) failed");
             }
-            wSrc = wetLinear.GetImages();
-        } else {
-            wSrc = imgWet.GetImages();
+            wetSrc = &wetLinear;
         }
 
-        DirectX::ScratchImage baseRGBA, wetRGBA;
+        // To RGBA8
         constexpr DXGI_FORMAT kFmt = DXGI_FORMAT_R8G8B8A8_UNORM;
+        DirectX::ScratchImage baseRGBA, wetRGBA;
 
-        if (FAILED(
-                DirectX::Convert(*bSrc, kFmt, DirectX::TEX_FILTER_DEFAULT, DirectX::TEX_THRESHOLD_DEFAULT, baseRGBA)))
-            return fallbackWet();
-        if (FAILED(DirectX::Convert(*wSrc, kFmt, DirectX::TEX_FILTER_DEFAULT, DirectX::TEX_THRESHOLD_DEFAULT, wetRGBA)))
-            return fallbackWet();
+        const auto& mb = baseSrc->GetMetadata();
+        const auto& mw = wetSrc->GetMetadata();
+        if (FAILED(DirectX::Convert(baseSrc->GetImages(), baseSrc->GetImageCount(), mb, kFmt,
+                                    DirectX::TEX_FILTER_DEFAULT, DirectX::TEX_THRESHOLD_DEFAULT, baseRGBA))) {
+            return fallbackWet("Convert(base) failed");
+        }
+        if (FAILED(DirectX::Convert(wetSrc->GetImages(), wetSrc->GetImageCount(), mw, kFmt, DirectX::TEX_FILTER_DEFAULT,
+                                    DirectX::TEX_THRESHOLD_DEFAULT, wetRGBA))) {
+            return fallbackWet("Convert(wet) failed");
+        }
 
         const DirectX::Image* b = baseRGBA.GetImage(0, 0, 0);
         const DirectX::Image* w = wetRGBA.GetImage(0, 0, 0);
-        if (!b || !w) return fallbackWet();
+        if (!b || !w) return fallbackWet("GetImage(0,0,0) failed");
 
         if (b->width != w->width || b->height != w->height) {
             DirectX::ScratchImage wetScaled;
             if (FAILED(DirectX::Resize(*w, b->width, b->height, DirectX::TEX_FILTER_CUBIC, wetScaled)))
-                return fallbackWet();
+                return fallbackWet("Resize failed");
             wetRGBA = std::move(wetScaled);
             w = wetRGBA.GetImage(0, 0, 0);
         }
 
         DirectX::ScratchImage outRGBA;
-        if (FAILED(outRGBA.Initialize2D(kFmt, b->width, b->height, 1, 1))) return fallbackWet();
+        if (FAILED(outRGBA.Initialize2D(kFmt, b->width, b->height, 1, 1))) return fallbackWet("Initialize2D failed");
 
         const float w01 = std::clamp(wetBucket / 10.0f, 0.0f, 1.0f);
         for (size_t y = 0; y < b->height; ++y) {
@@ -505,7 +506,7 @@ namespace SWE {
                                          DirectX::DDS_FLAGS_NONE, outPath.c_str());
         if (FAILED(hr)) {
             spdlog::error("[SWE] Merge: SaveToDDSFile failed: 0x{:08X} -> {}", (uint32_t)hr, outPath.string());
-            return fallbackWet();
+            return fallbackWet("SaveToDDSFile failed");
         }
         spdlog::info("[SWE] Merge: wrote {}", outPath.string());
 
@@ -761,6 +762,11 @@ namespace SWE {
             pickTexturesIfNeeded(st);
             st.active = true;
             st.lastWetBucket = -1;
+
+            if (auto* third = a->Get3D()) EnableSpecularOnSkinTree(third);
+            if (a->IsPlayerRef())
+                if (auto* pc = a->As<RE::PlayerCharacter>())
+                    if (auto* first = pc->Get3D(true)) EnableSpecularOnSkinTree(first);
         } else if (!active && st.active) {
             st.active = false;
         }
@@ -809,6 +815,13 @@ namespace SWE {
                             if (curSpec != mergedGame) {
                                 ts->SetTexturePath(RE::BSTextureSet::Texture::kSpecular, mergedGame.c_str());
                                 ts->SetTexturePath(RE::BSTextureSet::Texture::kBacklightMask, mergedGame.c_str());
+
+                                const char* d0 = ts->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse);
+                                const char* s7 = ts->GetTexturePath(RE::BSTextureSet::Texture::kSpecular);
+                                const char* b8 = ts->GetTexturePath(RE::BSTextureSet::Texture::kBacklightMask);
+                                spdlog::info("[SWE] GEOM='{}' d0='{}' s7='{}' b8='{}'", g->name.c_str(), d0 ? d0 : "",
+                                             s7 ? s7 : "", b8 ? b8 : "");
+
                                 l->SetMaterial(mat, true);
                                 l->DoClearRenderPasses();
                                 (void)l->SetupGeometry(g);
@@ -849,7 +862,11 @@ namespace SWE {
                         mat->specularColor = {1.0f, 1.0f, 1.0f};
                         mat->specularPower = std::max(mat->specularPower, gloss);
                         mat->specularColorScale = std::max(mat->specularColorScale, spec);
+
                         l->SetMaterial(mat, true);
+                        l->DoClearRenderPasses();
+                        (void)l->SetupGeometry(g);
+                        (void)l->FinishSetupGeometry(g);
                     }
                 }
             });
