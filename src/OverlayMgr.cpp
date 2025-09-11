@@ -842,8 +842,11 @@ namespace SWE {
                         auto* mat = l->material ? static_cast<RE::BSLightingShaderMaterialBase*>(l->material) : nullptr;
                         if (!mat) continue;
                         auto* sp = static_cast<RE::BSShaderProperty*>(l);
-                        sp->flags.set(RE::BSShaderProperty::EShaderPropertyFlag::kSpecular);
 
+                        sp->flags.set(RE::BSShaderProperty::EShaderPropertyFlag::kSpecular);
+                        sp->SetFlags(RE::BSShaderProperty::EShaderPropertyFlag8::kSpecular, true);
+
+                        mat->specularColor = {1.0f, 1.0f, 1.0f};
                         mat->specularPower = std::max(mat->specularPower, gloss);
                         mat->specularColorScale = std::max(mat->specularColorScale, spec);
                         l->SetMaterial(mat, true);
