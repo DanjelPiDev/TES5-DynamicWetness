@@ -261,12 +261,14 @@ extern "C" __declspec(dllexport) bool SKSEPlugin_Load(const SKSE::LoadInterface*
                 wc->Stop();
                 wc->OnPreLoadGame();
                 UI::ResetRegistration();
+                SWE::OverlayMgr::Get()->ClearCache();
                 SKSE::GetTaskInterface()->AddTask([]() { UI::Register(); });
                 break;
 
             case SKSE::MessagingInterface::kNewGame:
                 wc->OnPostLoadGame();
                 wc->Start();
+                SWE::OverlayMgr::Get()->ClearCache();
                 break;
 
             case SKSE::MessagingInterface::kPostLoadGame:

@@ -35,6 +35,7 @@ namespace SWE {
         static std::string ToGameTexPath(std::string p);
 
         void OnInterfaceMap(IInterfaceMap* map);
+        void ClearCache(bool removeDir = false);
 
         void OnWetnessUpdate(RE::Actor* a, float skinWet01);
         void RevertActor(RE::Actor* a, bool resetDiffuse = true);

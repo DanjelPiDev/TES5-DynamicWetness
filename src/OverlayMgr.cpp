@@ -88,8 +88,8 @@ namespace SWE {
                             sp->SetFlags(RE::BSShaderProperty::EShaderPropertyFlag8::kSpecular, true);
 
                             mat->specularColor = {1.0f, 1.0f, 1.0f};
-                            mat->specularColorScale = std::max(mat->specularColorScale, 10.0f);
-                            mat->specularPower = std::max(mat->specularPower, 800.0f);
+                            mat->specularColorScale = std::max(mat->specularColorScale, 100.0f);
+                            mat->specularPower = std::max(mat->specularPower, 1000.0f);
 
                             spdlog::debug("[SWE] specColor=({:.2f},{:.2f},{:.2f}) scale={:.1f} power={:.1f}",
                                           mat->specularColor.red, mat->specularColor.green, mat->specularColor.blue,
@@ -749,6 +749,35 @@ namespace SWE {
         auto it = _actors.find(a->GetFormID());
         if (it == _actors.end()) return;
         clearActor(a, it->second, resetDiffuse);
+    }
+
+    void SWE::OverlayMgr::ClearCache(bool removeDir) {
+        namespace fs = std::filesystem;
+        const fs::path dir = fs::path("Data") / "Textures" / "DynamicWetness" / "_cache";
+
+        {
+            std::lock_guard lk(_mergeMtx);
+            _mergeCache.clear();
+        }
+
+        std::error_code ec;
+
+        if (fs::exists(dir, ec)) {
+            fs::remove_all(dir, ec);
+            if (ec) {
+                spdlog::warn("[SWE] ClearCache: remove_all failed: {}", ec.message());
+            }
+        }
+
+        if (!removeDir) {
+            ec.clear();
+            fs::create_directories(dir, ec);
+            if (ec) {
+                spdlog::warn("[SWE] ClearCache: create_directories failed: {}", ec.message());
+            }
+        }
+
+        spdlog::info("[SWE] ClearCache: cache folder reset ({})", removeDir ? "removed" : "emptied");
     }
 
     void OverlayMgr::OnWetnessUpdate(RE::Actor* a, float skinWet01) {
