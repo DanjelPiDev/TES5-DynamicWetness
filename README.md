@@ -56,7 +56,7 @@ You can tweak e.g.:
 2. Build the desktop solution **x64 / Release** (e.g. `DirectXTex_Desktop_2022.sln`) **or** use CMake to generate an x64 Release static lib.  
 3. Note the two paths:
    - **Include**: the folder that contains `DirectXTex.h` (e.g. `E:\DX\DirectXTex\DirectXTex\`)  
-   - **Lib**: the built static library (e.g. `E:\DX\DirectXTex\DirectXTex\Bin\Desktop_2022_Win10\x64\Release\DirectXTex.lib`)
+   - **Lib**: the built static library (e.g. `X:\...\DirectXTex\Bin\Desktop_2022_Win10\x64\Release\DirectXTex.lib`)
 
 ### Tell CMake where DirectXTex is
 This project’s `CMakeLists.txt` expects **two environment variables**:
