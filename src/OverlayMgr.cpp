@@ -497,7 +497,7 @@ namespace SWE {
         DirectX::ScratchImage outBC;
         const bool compressOK =
             SUCCEEDED(DirectX::Compress(*outRGBA.GetImages(), DXGI_FORMAT_BC7_UNORM, DirectX::TEX_COMPRESS_DEFAULT,
-                                        1.0f,  // alphaWeight
+                                        1.0f,
                                         outBC));
         const DirectX::ScratchImage& toSave = compressOK ? outBC : outRGBA;
 
