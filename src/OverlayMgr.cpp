@@ -3,6 +3,10 @@
 #include <algorithm>
 #include <cctype>
 
+#if defined(SWE_USE_DIRECTX_TEX)
+    #include <DirectXTex.h>
+#endif
+
 #include "RE/B/BSLightingShaderMaterialBase.h"
 #include "RE/B/BSTextureSet.h"
 
@@ -10,6 +14,9 @@ using std::string;
 using std::vector;
 
 namespace fs = std::filesystem;
+
+using namespace DirectX;
+
 
 namespace SWE {
     static constexpr bool kWFR_Mode = true;
@@ -51,28 +58,18 @@ namespace SWE {
         void TextureSet(const BGSTextureSet*) override {}
     };
 
-    static inline string tolower_copy(string s) {
+    static inline std::string lc_norm_path(const char* p) {
+        if (!p || !p[0]) return {};
+        std::string s(p);
         std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+        std::replace(s.begin(), s.end(), '\\', '/');
+        if (s.rfind("data/", 0) == 0) s.erase(0, 5);
         return s;
     }
 
-    static bool IsSpecPath(const std::string& p) {
-        std::string s = p;
-        std::transform(s.begin(), s.end(), s.begin(), ::tolower);
-        return s.size() >= 6 && s.rfind("_s.dds") == s.size() - 6;
-    }
-
-    static std::string ToGameTexPath(std::string p) {
-        std::transform(p.begin(), p.end(), p.begin(), [](unsigned char c) { return (char)std::tolower(c); });
-        for (auto& ch : p)
-            if (ch == '\\') ch = '/';
-
-        if (p.rfind("data/", 0) == 0) p.erase(0, 5);
-
-        if (p.rfind("textures/", 0) != 0) {
-            spdlog::warn("[SWE] OverlayMgr: unexpected path '{}' (expected to start with textures/)", p);
-        }
-        return p;
+    static inline string tolower_copy(string s) {
+        std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+        return s;
     }
 
     static int EnableSpecularOnSkinTree(RE::NiAVObject* root) {
@@ -117,9 +114,9 @@ namespace SWE {
     }
 
     static std::string ToOverlayDiffusePathOrEmpty(std::string in) {
-        std::string p = ToGameTexPath(std::move(in));
+        std::string p = OverlayMgr::ToGameTexPath(std::move(in));
 
-        if (IsSpecPath(p)) {
+        if (OverlayMgr::IsSpecPath(p)) {
             std::string q = p;
             q.replace(q.size() - 6, 6, "_d.dds");
 
@@ -191,8 +188,8 @@ namespace SWE {
         if (!a || !ov) return;
         auto* refr = reinterpret_cast<TESObjectREFR*>(a);
 
-        const std::string bodySpec = bodySpecPath.empty() ? "" : ToGameTexPath(bodySpecPath);
-        const std::string handSpec = handSpecPath.empty() ? "" : ToGameTexPath(handSpecPath);
+        const std::string bodySpec = bodySpecPath.empty() ? "" : OverlayMgr::ToGameTexPath(bodySpecPath);
+        const std::string handSpec = handSpecPath.empty() ? "" : OverlayMgr::ToGameTexPath(handSpecPath);
 
         if (!bodySpec.empty()) {
             SVString s(bodySpec);
@@ -248,7 +245,7 @@ namespace SWE {
                         if (!ts) continue;
 
                         std::string specPath =
-                            forceWhiteDebug ? "textures/effects/fxwhite.dds" : ToGameTexPath(bodySpecPath);
+                            forceWhiteDebug ? "textures/effects/fxwhite.dds" : OverlayMgr::ToGameTexPath(bodySpecPath);
                         if (!specPath.empty()) {
                             ts->SetTexturePath(RE::BSTextureSet::Texture::kSpecular, specPath.c_str());
                             ts->SetTexturePath(RE::BSTextureSet::Texture::kBacklightMask, specPath.c_str());
@@ -332,6 +329,199 @@ namespace SWE {
             }
         }
         return out;
+    }
+
+    std::string SWE::OverlayMgr::GetFirstSkinSpecPath(RE::NiAVObject* root) {
+        std::string found;
+        if (!root) return found;
+        std::function<void(RE::NiAVObject*)> dfs = [&](RE::NiAVObject* o) {
+            if (found.size()) return;
+            if (auto* g = o->AsGeometry()) {
+                for (auto& p : g->GetGeometryRuntimeData().properties) {
+                    if (!p) continue;
+                    if (auto* l = skyrim_cast<RE::BSLightingShaderProperty*>(p.get())) {
+                        auto* mat = l->material ? static_cast<RE::BSLightingShaderMaterialBase*>(l->material) : nullptr;
+                        auto* ts = mat ? mat->textureSet.get() : nullptr;
+                        if (!ts) continue;
+                        auto* s7 = ts->GetTexturePath(RE::BSTextureSet::Texture::kSpecular);
+                        std::string sp = lc_norm_path(s7);
+                        if (!sp.empty() && IsSpecPath(sp)) {
+                            found = sp;
+                            return;
+                        }
+                    }
+                }
+            }
+            if (auto* n = o->AsNode())
+                for (auto& ch : n->GetChildren())
+                    if (ch) dfs(ch.get());
+        };
+        dfs(root);
+        return found;
+    }
+
+    std::string SWE::OverlayMgr::GetOrBuildMergedSpec(const std::string& baseSpec, const std::string& wetSpec,
+                                                      int wetBucket) {
+        if (baseSpec.empty() || wetSpec.empty()) return wetSpec;
+
+        const std::string key = baseSpec + "|" + wetSpec + "|" + std::to_string(wetBucket);
+
+        std::error_code ec;
+        const std::filesystem::path outDir = std::filesystem::path("Data/Textures/DynamicWetness/_cache");
+        std::filesystem::create_directories(outDir, ec);
+
+        {
+            std::lock_guard lk(_mergeMtx);
+            if (auto it = _mergeCache.find(key); it != _mergeCache.end()) return it->second;
+        }
+
+        auto fallbackWet = [&]() -> std::string {
+            std::filesystem::path src = "Data";
+            src /= (wetSpec.rfind("textures/", 0) == 0 ? wetSpec : ("textures/" + wetSpec));
+
+            auto dst = outDir / ("spec_wetonly_" + std::to_string(std::hash<std::string>{}(key)) + ".dds");
+
+            std::error_code copyEC;
+            std::filesystem::copy_file(src, dst, std::filesystem::copy_options::overwrite_existing, copyEC);
+            if (copyEC) {
+                spdlog::warn("[SWE] Fallback copy failed: {}", copyEC.message());
+                std::string gameRel = (std::filesystem::path("Data") /
+                                       (wetSpec.rfind("textures/", 0) == 0 ? wetSpec : "textures/" + wetSpec))
+                                          .generic_string();
+                std::transform(gameRel.begin(), gameRel.end(), gameRel.begin(), ::tolower);
+                if (auto pos = gameRel.find("data/"); pos != std::string::npos) gameRel.erase(0, pos + 5);
+                std::lock_guard lk(_mergeMtx);
+                _mergeCache[key] = gameRel;
+                return gameRel;
+            }
+
+            std::string gameRel = dst.generic_string();
+            std::transform(gameRel.begin(), gameRel.end(), gameRel.begin(), ::tolower);
+            if (auto pos = gameRel.find("data/"); pos != std::string::npos) gameRel.erase(0, pos + 5);
+            std::lock_guard lk(_mergeMtx);
+            _mergeCache[key] = gameRel;
+            return gameRel;
+        };
+
+#if defined(SWE_USE_DIRECTX_TEX)
+        
+        const std::filesystem::path outPath =
+            outDir / ("spec_" + std::to_string(std::hash<std::string>{}(key)) + ".dds");
+
+        spdlog::info("[SWE] Merging spec '{}' + '{}' (bucket {})", baseSpec, wetSpec, wetBucket);
+
+        auto toAbs = [](const std::string& gamePath) {
+            std::filesystem::path p = "Data";
+            p /= (gamePath.rfind("textures/", 0) == 0 ? gamePath : ("textures/" + gamePath));
+            return p;
+        };
+
+        DirectX::ScratchImage imgBase, imgWet;
+        if (FAILED(DirectX::LoadFromDDSFile(toAbs(baseSpec).c_str(), DirectX::DDS_FLAGS_NONE, nullptr, imgBase))) {
+            spdlog::warn("[SWE] Merge: failed to load base '{}', fallback to wet only", baseSpec);
+            return fallbackWet();
+        }
+        if (FAILED(DirectX::LoadFromDDSFile(toAbs(wetSpec).c_str(), DirectX::DDS_FLAGS_NONE, nullptr, imgWet))) {
+            spdlog::warn("[SWE] Merge: failed to load wet '{}', fallback to wet only", wetSpec);
+            return fallbackWet();
+        }
+
+        const DirectX::TexMetadata metaB = imgBase.GetMetadata();
+        const DirectX::TexMetadata metaW = imgWet.GetMetadata();
+
+        DirectX::ScratchImage baseLinear, wetLinear;
+        const DirectX::Image* bSrc = nullptr;
+        const DirectX::Image* wSrc = nullptr;
+
+        if (DirectX::IsCompressed(metaB.format)) {
+            if (FAILED(DirectX::Decompress(imgBase.GetImages(), imgBase.GetImageCount(), metaB, DXGI_FORMAT_UNKNOWN,
+                                           baseLinear))) {
+                spdlog::warn("[SWE] Merge: Decompress(base) failed, fallback");
+                return fallbackWet();
+            }
+            bSrc = baseLinear.GetImages();
+        } else {
+            bSrc = imgBase.GetImages();
+        }
+
+        if (DirectX::IsCompressed(metaW.format)) {
+            if (FAILED(DirectX::Decompress(imgWet.GetImages(), imgWet.GetImageCount(), metaW, DXGI_FORMAT_UNKNOWN,
+                                           wetLinear))) {
+                spdlog::warn("[SWE] Merge: Decompress(wet) failed, fallback");
+                return fallbackWet();
+            }
+            wSrc = wetLinear.GetImages();
+        } else {
+            wSrc = imgWet.GetImages();
+        }
+
+        DirectX::ScratchImage baseRGBA, wetRGBA;
+        constexpr DXGI_FORMAT kFmt = DXGI_FORMAT_R8G8B8A8_UNORM;
+
+        if (FAILED(
+                DirectX::Convert(*bSrc, kFmt, DirectX::TEX_FILTER_DEFAULT, DirectX::TEX_THRESHOLD_DEFAULT, baseRGBA)))
+            return fallbackWet();
+        if (FAILED(DirectX::Convert(*wSrc, kFmt, DirectX::TEX_FILTER_DEFAULT, DirectX::TEX_THRESHOLD_DEFAULT, wetRGBA)))
+            return fallbackWet();
+
+        const DirectX::Image* b = baseRGBA.GetImage(0, 0, 0);
+        const DirectX::Image* w = wetRGBA.GetImage(0, 0, 0);
+        if (!b || !w) return fallbackWet();
+
+        if (b->width != w->width || b->height != w->height) {
+            DirectX::ScratchImage wetScaled;
+            if (FAILED(DirectX::Resize(*w, b->width, b->height, DirectX::TEX_FILTER_CUBIC, wetScaled)))
+                return fallbackWet();
+            wetRGBA = std::move(wetScaled);
+            w = wetRGBA.GetImage(0, 0, 0);
+        }
+
+        DirectX::ScratchImage outRGBA;
+        if (FAILED(outRGBA.Initialize2D(kFmt, b->width, b->height, 1, 1))) return fallbackWet();
+
+        const float w01 = std::clamp(wetBucket / 10.0f, 0.0f, 1.0f);
+        for (size_t y = 0; y < b->height; ++y) {
+            const uint8_t* pb = b->pixels + y * b->rowPitch;
+            const uint8_t* pw = w->pixels + y * w->rowPitch;
+            uint8_t* po = outRGBA.GetImages()->pixels + y * outRGBA.GetImages()->rowPitch;
+            for (size_t x = 0; x < b->width; ++x) {
+                const uint8_t br = pb[4 * x + 0], bg = pb[4 * x + 1], bb = pb[4 * x + 2], ba = pb[4 * x + 3];
+                const uint8_t wr = pw[4 * x + 0], wg = pw[4 * x + 1], wb = pw[4 * x + 2], wa = pw[4 * x + 3];
+                po[4 * x + 0] = static_cast<uint8_t>(std::max<int>(br, (int)std::round(wr * w01)));
+                po[4 * x + 1] = static_cast<uint8_t>(std::max<int>(bg, (int)std::round(wg * w01)));
+                po[4 * x + 2] = static_cast<uint8_t>(std::max<int>(bb, (int)std::round(wb * w01)));
+                po[4 * x + 3] = static_cast<uint8_t>(std::max<int>(ba, (int)std::round(wa * w01)));
+            }
+        }
+
+        DirectX::ScratchImage outBC;
+        const bool compressOK =
+            SUCCEEDED(DirectX::Compress(*outRGBA.GetImages(), DXGI_FORMAT_BC7_UNORM, DirectX::TEX_COMPRESS_DEFAULT,
+                                        1.0f,  // alphaWeight
+                                        outBC));
+        const DirectX::ScratchImage& toSave = compressOK ? outBC : outRGBA;
+
+        auto hr = DirectX::SaveToDDSFile(toSave.GetImages(), toSave.GetImageCount(), toSave.GetMetadata(),
+                                         DirectX::DDS_FLAGS_NONE, outPath.c_str());
+        if (FAILED(hr)) {
+            spdlog::error("[SWE] Merge: SaveToDDSFile failed: 0x{:08X} -> {}", (uint32_t)hr, outPath.string());
+            return fallbackWet();
+        }
+        spdlog::info("[SWE] Merge: wrote {}", outPath.string());
+
+        std::string gameRel = outPath.generic_string();
+        std::transform(gameRel.begin(), gameRel.end(), gameRel.begin(), ::tolower);
+        if (auto posData = gameRel.find("data/"); posData != std::string::npos) gameRel.erase(0, posData + 5);
+
+        {
+            std::lock_guard lk(_mergeMtx);
+            _mergeCache[key] = gameRel;
+        }
+        return gameRel;
+#else
+        spdlog::warn("[SWE] Merge: DirectXTex not enabled, fallback");
+        return fallbackWet();
+#endif
     }
 
     bool OverlayMgr::isOverlayNodeName(std::string_view n) {
@@ -431,6 +621,22 @@ namespace SWE {
                 _aum->Flush();
             }
         }
+    }
+
+    bool SWE::OverlayMgr::IsSpecPath(const std::string& p) {
+        std::string s = p;
+        std::transform(s.begin(), s.end(), s.begin(), ::tolower);
+        return s.size() >= 6 && s.rfind("_s.dds") == s.size() - 6;
+    }
+
+    std::string SWE::OverlayMgr::ToGameTexPath(std::string p) {
+        std::transform(p.begin(), p.end(), p.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+        for (auto& ch : p)
+            if (ch == '\\') ch = '/';
+        if (p.rfind("data/", 0) == 0) p.erase(0, 5);
+        if (p.rfind("textures/", 0) != 0)
+            spdlog::warn("[SWE] OverlayMgr: unexpected path '{}' (expected to start with textures/)", p);
+        return p;
     }
 
     void OverlayMgr::pickTexturesIfNeeded(ActorState& st) {
@@ -546,33 +752,108 @@ namespace SWE {
 
     void OverlayMgr::OnWetnessUpdate(RE::Actor* a, float skinWet01) {
         if (!_enabled || !a) return;
-
         std::lock_guard lk(_mtx);
         auto& st = _actors[a->GetFormID()];
         st.female = isFemale(a);
 
         const bool active = (skinWet01 >= _threshold);
-
         if (active && !st.active) {
             pickTexturesIfNeeded(st);
             st.active = true;
+            st.lastWetBucket = -1;
         } else if (!active && st.active) {
             st.active = false;
         }
-
         if (!active) return;
+
+        if (st.baseSpecBody.empty()) {
+            if (auto* third = a->Get3D()) st.baseSpecBody = GetFirstSkinSpecPath(third);
+            if (st.baseSpecBody.empty() && a->IsPlayerRef())
+                if (auto* pc = a->As<RE::PlayerCharacter>()) {
+                    if (auto* first = pc->Get3D(true)) st.baseSpecBody = GetFirstSkinSpecPath(first);
+                }
+            if (st.baseSpecBody.empty()) {
+                spdlog::debug("[SWE] No base spec snapshot found; will continue with wet only.");
+            } else {
+                spdlog::debug("[SWE] Base spec snapshot = '{}'", st.baseSpecBody);
+            }
+        }
+
+        const int wetBucket = QuantizeWet(skinWet01);
+        if (wetBucket == st.lastWetBucket) {
+            // Do nothing if bucket unchanged?
+        } else {
+            st.lastWetBucket = wetBucket;
+
+            const std::string chosen = st.chosenBody;
+            const std::string wetSpecGame = ToGameTexPath(chosen);
+            const std::string baseSpecGame = st.baseSpecBody;
+
+            std::string mergedGame = wetSpecGame;
+            if (!baseSpecGame.empty()) mergedGame = GetOrBuildMergedSpec(baseSpecGame, wetSpecGame, wetBucket);
+
+            auto setOnTree = [&](RE::NiAVObject* root) -> int {
+                int changed = 0;
+                if (!root) return 0;
+                forEachSkinGeom(root, [&](RE::BSGeometry* g) {
+                    for (auto& p : g->GetGeometryRuntimeData().properties) {
+                        if (!p) continue;
+                        if (auto* l = skyrim_cast<RE::BSLightingShaderProperty*>(p.get())) {
+                            auto* mat =
+                                l->material ? static_cast<RE::BSLightingShaderMaterialBase*>(l->material) : nullptr;
+                            auto* ts = mat ? mat->textureSet.get() : nullptr;
+                            if (!ts) continue;
+
+                            const char* cur7 = ts->GetTexturePath(RE::BSTextureSet::Texture::kSpecular);
+                            std::string curSpec = lc_norm_path(cur7);
+                            if (curSpec != mergedGame) {
+                                ts->SetTexturePath(RE::BSTextureSet::Texture::kSpecular, mergedGame.c_str());
+                                ts->SetTexturePath(RE::BSTextureSet::Texture::kBacklightMask, mergedGame.c_str());
+                                l->SetMaterial(mat, true);
+                                l->DoClearRenderPasses();
+                                (void)l->SetupGeometry(g);
+                                (void)l->FinishSetupGeometry(g);
+                                ++changed;
+                            }
+                        }
+                    }
+                });
+                return changed;
+            };
+
+            int total = 0;
+            if (auto* third = a->Get3D()) total += setOnTree(third);
+            if (a->IsPlayerRef())
+                if (auto* pc = a->As<RE::PlayerCharacter>())
+                    if (auto* first = pc->Get3D(true)) total += setOnTree(first);
+
+            spdlog::debug("[SWE] Applied merged spec (bucket={}) to {} geoms", wetBucket, total);
+        }
 
         const float gloss = std::clamp(60.0f + skinWet01 * 200.0f, 0.f, 400.f);
         const float spec = std::clamp(2.5f + skinWet01 * 7.5f, 0.f, 100.f);
 
-        int patched = 0;
-        if (_ni) {
-            ApplyWetViaNiOverride(a, st.female, st.chosenBody, st.chosenHand, gloss, spec, _ni, _aum);
-        } else {
-            patched = ApplyWetDirectToSkin(a, st.chosenBody, st.chosenHand, gloss, spec, false);
-            if (patched == 0) {
-                patched = ApplyWetDirectToSkin(a, st.chosenBody, st.chosenHand, gloss, spec, true);
-            }
-        }
+        auto setCaps = [&](RE::NiAVObject* root) {
+            if (!root) return;
+            forEachSkinGeom(root, [&](RE::BSGeometry* g) {
+                for (auto& p : g->GetGeometryRuntimeData().properties) {
+                    if (!p) continue;
+                    if (auto* l = skyrim_cast<RE::BSLightingShaderProperty*>(p.get())) {
+                        auto* mat = l->material ? static_cast<RE::BSLightingShaderMaterialBase*>(l->material) : nullptr;
+                        if (!mat) continue;
+                        auto* sp = static_cast<RE::BSShaderProperty*>(l);
+                        sp->flags.set(RE::BSShaderProperty::EShaderPropertyFlag::kSpecular);
+
+                        mat->specularPower = std::max(mat->specularPower, gloss);
+                        mat->specularColorScale = std::max(mat->specularColorScale, spec);
+                        l->SetMaterial(mat, true);
+                    }
+                }
+            });
+        };
+        if (auto* third = a->Get3D()) setCaps(third);
+        if (a->IsPlayerRef())
+            if (auto* pc = a->As<RE::PlayerCharacter>())
+                if (auto* first = pc->Get3D(true)) setCaps(first);
     }
 }
