@@ -1397,24 +1397,45 @@ namespace SWE {
             return gameRel;
         };
 
-        if (FAILED(Convert(baseSrc->GetImages(), baseSrc->GetImageCount(), mb, kFmt, baseFilter, TEX_THRESHOLD_DEFAULT,
-                           baseRGBA)))
-            return fallbackWet("Convert(base) failed");
-        if (FAILED(Convert(wetSrc->GetImages(), wetSrc->GetImageCount(), mw, kFmt, wetFilter, TEX_THRESHOLD_DEFAULT,
-                           wetRGBA)))
-            return fallbackWet("Convert(wet) failed");
+        if (IsCompressed(metaB.format)) {
+            if (FAILED(Decompress(imgBase.GetImages(), imgBase.GetImageCount(), metaB, DXGI_FORMAT_R8G8B8A8_UNORM,
+                                  baseLinear)))
+                return fallbackWet("Decompress(base) failed");
+            baseSrc = &baseLinear;
+        }
+        if (IsCompressed(metaW.format)) {
+            if (FAILED(Decompress(imgWet.GetImages(), imgWet.GetImageCount(), metaW, DXGI_FORMAT_R8G8B8A8_UNORM,
+                                  wetLinear)))
+                return fallbackWet("Decompress(wet) failed");
+            wetSrc = &wetLinear;
+        }
 
-        const Image* bi = baseRGBA.GetImage(0, 0, 0);
-        const Image* wi = wetRGBA.GetImage(0, 0, 0);
-
-        ScratchImage wetResized;
-        const Image* wImg = wi;
-        if (wi->width != bi->width || wi->height != bi->height) {
-            if (FAILED(Resize(wetRGBA.GetImages(), wetRGBA.GetImageCount(), wetRGBA.GetMetadata(), bi->width,
-                              bi->height, TEX_FILTER_DEFAULT, wetResized))) {
-                return save_wetonly_expanded("Resize(wet->base) failed");
+        const Image* bi = nullptr;
+        if (mb.format == kFmt) {
+            bi = baseSrc->GetImage(0, 0, 0);
+        } else {
+            HRESULT hrB = Convert(baseSrc->GetImages(), baseSrc->GetImageCount(), mb, kFmt, baseFilter,
+                                  TEX_THRESHOLD_DEFAULT, baseRGBA);
+            if (FAILED(hrB)) {
+                spdlog::warn("[SWE] Convert(base) failed hr=0x{:08X} (fmt={}, w={}, h={}, mips={})", (uint32_t)hrB,
+                             (int)mb.format, mb.width, mb.height, mb.mipLevels);
+                return save_wetonly_expanded("Convert(base) failed");
             }
-            wImg = wetResized.GetImage(0, 0, 0);
+            bi = baseRGBA.GetImage(0, 0, 0);
+        }
+
+        const Image* wImg = nullptr;
+        if (mw.format == kFmt) {
+            wImg = wetSrc->GetImage(0, 0, 0);
+        } else {
+            HRESULT hrW = Convert(wetSrc->GetImages(), wetSrc->GetImageCount(), mw, kFmt, wetFilter,
+                                  TEX_THRESHOLD_DEFAULT, wetRGBA);
+            if (FAILED(hrW)) {
+                spdlog::warn("[SWE] Convert(wet) failed hr=0x{:08X} (fmt={}, w={}, h={}, mips={})", (uint32_t)hrW,
+                             (int)mw.format, mw.width, mw.height, mw.mipLevels);
+                return fallbackWet("Convert(wet) failed");
+            }
+            wImg = wetRGBA.GetImage(0, 0, 0);
         }
 
         {
