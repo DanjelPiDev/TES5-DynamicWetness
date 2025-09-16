@@ -519,15 +519,6 @@ namespace SWE {
                ((static_cast<std::uint32_t>(subSystemNoCollide) & 0x1F) << 11) |
                ((static_cast<std::uint32_t>(systemGroup) & 0xFFFF) << 16);
     }
-    static constexpr RE::COL_LAYER kRoofLayersPrimary[] = {
-        RE::COL_LAYER::kStatic,        RE::COL_LAYER::kAnimStatic,  RE::COL_LAYER::kTransparentWall,
-        RE::COL_LAYER::kInvisibleWall, RE::COL_LAYER::kTransparent, RE::COL_LAYER::kLOS,
-    };
-
-    static constexpr RE::COL_LAYER kRoofLayersFallback[] = {
-        RE::COL_LAYER::kProps,         RE::COL_LAYER::kTrees,       RE::COL_LAYER::kClutterLarge,
-        RE::COL_LAYER::kDoorDetection, RE::COL_LAYER::kPathingPick,
-    };
 
     static inline std::uint32_t RayFilter(RE::COL_LAYER lyr) { return MakeFilterInfo(lyr, 0xFFFF, 0, 0); }
     static inline RE::bhkWorld* GetBhkWorldFromActorCell(const RE::Actor* a) {
@@ -1715,8 +1706,7 @@ namespace SWE {
         // DebugRayScan(bw, from, to);
 #endif
 
-        static constexpr RE::COL_LAYER kPrim[] = {RE::COL_LAYER::kLOS, RE::COL_LAYER::kStatic,
-                                                  RE::COL_LAYER::kTransparentWall, RE::COL_LAYER::kInvisibleWall};
+        static constexpr RE::COL_LAYER kPrim[] = {RE::COL_LAYER::kLOS, RE::COL_LAYER::kStatic}; // RE::COL_LAYER::kTransparentWall, RE::COL_LAYER::kInvisibleWall
 
         for (auto lyr : kPrim) {
             const auto fi = MakeFilterInfo(lyr, 0xFFFF, 0, 0);
@@ -1760,13 +1750,14 @@ namespace SWE {
             {base.x, base.y + off, headZ},
         };
 #endif
-
+        int hits = 0;
+        const int N = static_cast<int>(std::size(starts));
         for (const auto& s : starts) {
             const RE::NiPoint3 from{s.x, s.y, headZ + 2.0f};
             const RE::NiPoint3 to{s.x, s.y, headZ + toAbove};
-            if (RayHitsCover(from, to, a)) return true;
+            if (RayHitsCover(from, to, a)) ++hits;
         }
-        return false;
+        return hits >= (N / 2 + 1);
     }
 
     float WetController::GetGameHours() const {

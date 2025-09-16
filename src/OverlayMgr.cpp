@@ -5,17 +5,18 @@
 
 #if defined(SWE_USE_DIRECTX_TEX)
     #include <DirectXTex.h>
+    using namespace DirectX;
 #endif
 
 #include "RE/B/BSLightingShaderMaterialBase.h"
 #include "RE/B/BSTextureSet.h"
 
+#include "Settings.h"
+
 using std::string;
 using std::vector;
 
 namespace fs = std::filesystem;
-
-using namespace DirectX;
 
 
 namespace SWE {
@@ -81,8 +82,7 @@ namespace SWE {
                 for (auto& prop : rd.properties) {
                     if (!prop) continue;
                     if (auto* l = skyrim_cast<RE::BSLightingShaderProperty*>(prop.get())) {
-                        if (auto* mat =
-                                l->material ? static_cast<RE::BSLightingShaderMaterialBase*>(l->material) : nullptr) {
+                        if (auto* mat = l->material ? static_cast<RE::BSLightingShaderMaterialBase*>(l->material) : nullptr) {
                             auto* sp = static_cast<RE::BSShaderProperty*>(l);
                             sp->flags.set(RE::BSShaderProperty::EShaderPropertyFlag::kSpecular);
                             sp->SetFlags(RE::BSShaderProperty::EShaderPropertyFlag8::kSpecular, true);
@@ -281,6 +281,58 @@ namespace SWE {
         return total;
     }
 
+    void OverlayMgr::StartMergeWorker() {
+        bool expected = false;
+        if (!_mergeAlive.compare_exchange_strong(expected, true)) return;
+
+        _mergeThread = std::thread([this]() {
+            while (_mergeAlive.load()) {
+                MergeJob job;
+                {
+                    std::unique_lock lk(_jobMtx);
+                    _jobCv.wait(lk, [&]() { return !_mergeAlive.load() || !_jobQ.empty(); });
+                    if (!_mergeAlive.load()) break;
+                    job = _jobQ.front();
+                    _jobQ.pop_front();
+                }
+
+                std::string outGame = BuildMergedSpecSync(job.key, job.baseSpec, job.wetSpec, job.bucket);
+
+                if (!outGame.empty() && job.actor != 0) {
+                    SKSE::GetTaskInterface()->AddTask([this, job]() {
+                        ApplyMergedIfStillRelevant(job.actor, job.baseSpec, job.wetSpec, job.bucket);
+                    });
+                }
+
+                {
+                    std::lock_guard lk(_jobMtx);
+                    _inflightKeys.erase(job.key);
+                }
+            }
+        });
+    }
+
+    void OverlayMgr::StopMergeWorker() {
+        _mergeAlive.store(false);
+        _jobCv.notify_all();
+        if (_mergeThread.joinable()) _mergeThread.join();
+        {
+            std::lock_guard lk(_jobMtx);
+            _jobQ.clear();
+            _inflightKeys.clear();
+        }
+    }
+
+    void OverlayMgr::EnqueueMerge(MergeJob j) {
+        StartMergeWorker();
+
+        std::lock_guard lk(_jobMtx);
+        if (_inflightKeys.insert(j.key).second) {
+            _jobQ.push_back(std::move(j));
+            _jobCv.notify_one();
+        }
+    }
+
     void OverlayMgr::OnInterfaceMap(IInterfaceMap* map) {
         if (!map) return;
 
@@ -450,17 +502,172 @@ namespace SWE {
             wetSrc = &wetLinear;
         }
 
-        // To RGBA8
-        constexpr DXGI_FORMAT kFmt = DXGI_FORMAT_R8G8B8A8_UNORM;
+        const DXGI_FORMAT kFmt = DXGI_FORMAT_R8G8B8A8_UNORM;
         DirectX::ScratchImage baseRGBA, wetRGBA;
 
         const auto& mb = baseSrc->GetMetadata();
         const auto& mw = wetSrc->GetMetadata();
-        if (FAILED(DirectX::Convert(baseSrc->GetImages(), baseSrc->GetImageCount(), mb, kFmt,
-                                    DirectX::TEX_FILTER_DEFAULT, DirectX::TEX_THRESHOLD_DEFAULT, baseRGBA))) {
-            return fallbackWet("Convert(base) failed");
+
+        DirectX::TEX_FILTER_FLAGS baseFilter = DirectX::TEX_FILTER_DEFAULT;
+        DirectX::TEX_FILTER_FLAGS wetFilter = DirectX::TEX_FILTER_DEFAULT;
+
+        if (DirectX::IsSRGB(mb.format) || DirectX::IsSRGB(kFmt))
+            baseFilter = static_cast<DirectX::TEX_FILTER_FLAGS>(baseFilter | DirectX::TEX_FILTER_SRGB);
+        if (DirectX::IsSRGB(mw.format) || DirectX::IsSRGB(kFmt))
+            wetFilter = static_cast<DirectX::TEX_FILTER_FLAGS>(wetFilter | DirectX::TEX_FILTER_SRGB);
+
+        auto save_wetonly_expanded = [&](const char* why) -> std::string {
+            spdlog::warn("[SWE] Merge: fallback ({} -> expanding wet alpha->RGB)", why ? why : "unknown");
+
+            DirectX::ScratchImage wetOnlyRGBA;
+            if (FAILED(DirectX::Convert(wetSrc->GetImages(), wetSrc->GetImageCount(), mw, kFmt, wetFilter,
+                                        DirectX::TEX_THRESHOLD_DEFAULT, wetOnlyRGBA))) {
+                return fallbackWet("Convert(wet) failed in expanded fallback");
+            }
+
+            const DirectX::Image* wi = wetOnlyRGBA.GetImage(0, 0, 0);
+            for (size_t y = 0; y < wi->height; ++y) {
+                uint8_t* row = wi->pixels + y * wi->rowPitch;
+                for (size_t x = 0; x < wi->width; ++x) {
+                    uint8_t* px = row + 4 * x;
+                    const uint8_t a = px[3];
+                    const bool rgbDark = (px[0] | px[1] | px[2]) < 5;
+                    if (rgbDark) px[0] = px[1] = px[2] = a;
+                    if (px[3] < 12) px[3] = 12;
+                }
+            }
+
+            DirectX::ScratchImage outBC;
+            const bool compressOK = SUCCEEDED(DirectX::Compress(*wetOnlyRGBA.GetImages(), DXGI_FORMAT_BC7_UNORM,
+                                                                DirectX::TEX_COMPRESS_DEFAULT, 1.0f, outBC));
+            const DirectX::ScratchImage& toSave = compressOK ? outBC : wetOnlyRGBA;
+
+            auto writeExpandedWetOnly = [&](const std::string& wetSpec, const std::string& key) -> std::string {
+                auto toAbs = [](const std::string& gamePath) {
+                    std::filesystem::path p = "Data";
+                    p /= (gamePath.rfind("textures/", 0) == 0 ? gamePath : ("textures/" + gamePath));
+                    return p;
+                };
+
+                DirectX::ScratchImage imgWet;
+                if (FAILED(DirectX::LoadFromDDSFile(
+                        toAbs(wetSpec).c_str(), DirectX::DDS_FLAGS_LEGACY_DWORD | DirectX::DDS_FLAGS_ALLOW_LARGE_FILES,
+                        nullptr, imgWet))) {
+                    return fallbackWet("LoadFromDDS(wet) failed");
+                }
+
+                const auto metaW = imgWet.GetMetadata();
+                const DirectX::ScratchImage* wetSrc = &imgWet;
+                DirectX::ScratchImage wetDecomp;
+
+                if (DirectX::IsCompressed(metaW.format)) {
+                    if (FAILED(DirectX::Decompress(imgWet.GetImages(), imgWet.GetImageCount(), metaW,
+                                                   DXGI_FORMAT_R8G8B8A8_UNORM, wetDecomp))) {
+                        return fallbackWet("Decompress(wet) failed");
+                    }
+                    wetSrc = &wetDecomp;
+                }
+
+                const DirectX::Image* w = wetSrc->GetImage(0, 0, 0);
+                if (!w) return fallbackWet("GetImage(wet) failed");
+
+                DirectX::ScratchImage outRGBA;
+                if (FAILED(outRGBA.Initialize2D(DXGI_FORMAT_R8G8B8A8_UNORM, w->width, w->height, 1, 1))) {
+                    return fallbackWet("Initialize2D(expand) failed");
+                }
+
+                auto* outImg = outRGBA.GetImages();
+                for (size_t y = 0; y < w->height; ++y) {
+                    const uint8_t* pw = w->pixels + y * w->rowPitch;
+                    uint8_t* po = outImg->pixels + y * outImg->rowPitch;
+
+                    switch (wetSrc->GetMetadata().format) {
+                        case DXGI_FORMAT_A8_UNORM:
+                        case DXGI_FORMAT_R8_UNORM: {
+                            for (size_t x = 0; x < w->width; ++x) {
+                                uint8_t m = pw[x];
+                                po[4 * x + 0] = m;
+                                po[4 * x + 1] = m;
+                                po[4 * x + 2] = m;
+                                po[4 * x + 3] = m;
+                            }
+                            break;
+                        }
+                        case DXGI_FORMAT_R8G8B8A8_UNORM:
+                        case DXGI_FORMAT_B8G8R8A8_UNORM: {
+                            for (size_t x = 0; x < w->width; ++x) {
+                                const uint8_t r = pw[4 * x + 0], g = pw[4 * x + 1], b = pw[4 * x + 2],
+                                              a = pw[4 * x + 3];
+                                const uint8_t rr = std::max(r, a);
+                                const uint8_t gg = std::max(g, a);
+                                const uint8_t bb = std::max(b, a);
+                                const uint8_t aa = std::max<uint8_t>(std::max(rr, std::max(gg, bb)), a);
+                                po[4 * x + 0] = rr;
+                                po[4 * x + 1] = gg;
+                                po[4 * x + 2] = bb;
+                                po[4 * x + 3] = aa;
+                            }
+                            break;
+                        }
+                        default: {
+                            const size_t step = 1;
+                            for (size_t x = 0; x < w->width; ++x) {
+                                uint8_t m = pw[x * step];
+                                po[4 * x + 0] = m;
+                                po[4 * x + 1] = m;
+                                po[4 * x + 2] = m;
+                                po[4 * x + 3] = m;
+                            }
+                            break;
+                        }
+                    }
+                }
+
+                DirectX::ScratchImage outBC;
+                const bool compressOK = SUCCEEDED(DirectX::Compress(*outRGBA.GetImages(), DXGI_FORMAT_BC7_UNORM,
+                                                                    DirectX::TEX_COMPRESS_DEFAULT, 1.0f, outBC));
+                const auto& toSave = compressOK ? outBC : outRGBA;
+
+                auto dst = outDir / ("spec_wetexpanded_" + std::to_string(std::hash<std::string>{}(key)) + ".dds");
+                if (FAILED(DirectX::SaveToDDSFile(toSave.GetImages(), toSave.GetImageCount(), toSave.GetMetadata(),
+                                                  DirectX::DDS_FLAGS_NONE, dst.c_str()))) {
+                    return fallbackWet("SaveToDDS(expanded) failed");
+                }
+
+                std::string gameRel = dst.generic_string();
+                std::transform(gameRel.begin(), gameRel.end(), gameRel.begin(), ::tolower);
+                if (auto pos = gameRel.find("data/"); pos != std::string::npos) gameRel.erase(0, pos + 5);
+
+                {
+                    std::lock_guard lk(_mergeMtx);
+                    _mergeCache[key] = gameRel;
+                }
+                spdlog::info("[SWE] Merge: wrote expanded wet-only {}", gameRel);
+                return gameRel;
+            };
+
+            auto dst = outDir / ("spec_wetonly_" + std::to_string(std::hash<std::string>{}(key)) + ".dds");
+            auto hr = DirectX::SaveToDDSFile(toSave.GetImages(), toSave.GetImageCount(), toSave.GetMetadata(),
+                                             DirectX::DDS_FLAGS_NONE, dst.c_str());
+            if (FAILED(hr)) {
+                spdlog::error("[SWE] Merge: SaveToDDS(wetonly expanded) failed: 0x{:08X}", (uint32_t)hr);
+                return fallbackWet("SaveToDDS(wetonly expanded) failed");
+            }
+
+            std::string gameRel = dst.generic_string();
+            std::transform(gameRel.begin(), gameRel.end(), gameRel.begin(), ::tolower);
+            if (auto pos = gameRel.find("data/"); pos != std::string::npos) gameRel.erase(0, pos + 5);
+            std::lock_guard lk(_mergeMtx);
+            _mergeCache[key] = gameRel;
+            return gameRel;
+        };
+
+        if (FAILED(DirectX::Convert(baseSrc->GetImages(), baseSrc->GetImageCount(), mb, kFmt, baseFilter,
+                                    DirectX::TEX_THRESHOLD_DEFAULT, baseRGBA))) {
+            return save_wetonly_expanded("Convert(base) failed");
         }
-        if (FAILED(DirectX::Convert(wetSrc->GetImages(), wetSrc->GetImageCount(), mw, kFmt, DirectX::TEX_FILTER_DEFAULT,
+
+        if (FAILED(DirectX::Convert(wetSrc->GetImages(), wetSrc->GetImageCount(), mw, kFmt, wetFilter,
                                     DirectX::TEX_THRESHOLD_DEFAULT, wetRGBA))) {
             return fallbackWet("Convert(wet) failed");
         }
@@ -485,9 +692,11 @@ namespace SWE {
             const uint8_t* pb = b->pixels + y * b->rowPitch;
             const uint8_t* pw = w->pixels + y * w->rowPitch;
             uint8_t* po = outRGBA.GetImages()->pixels + y * outRGBA.GetImages()->rowPitch;
+
             for (size_t x = 0; x < b->width; ++x) {
                 const uint8_t br = pb[4 * x + 0], bg = pb[4 * x + 1], bb = pb[4 * x + 2], ba = pb[4 * x + 3];
                 const uint8_t wr = pw[4 * x + 0], wg = pw[4 * x + 1], wb = pw[4 * x + 2], wa = pw[4 * x + 3];
+
                 po[4 * x + 0] = static_cast<uint8_t>(std::max<int>(br, (int)std::round(wr * w01)));
                 po[4 * x + 1] = static_cast<uint8_t>(std::max<int>(bg, (int)std::round(wg * w01)));
                 po[4 * x + 2] = static_cast<uint8_t>(std::max<int>(bb, (int)std::round(wb * w01)));
@@ -496,10 +705,8 @@ namespace SWE {
         }
 
         DirectX::ScratchImage outBC;
-        const bool compressOK =
-            SUCCEEDED(DirectX::Compress(*outRGBA.GetImages(), DXGI_FORMAT_BC7_UNORM, DirectX::TEX_COMPRESS_DEFAULT,
-                                        1.0f,
-                                        outBC));
+        const bool compressOK = SUCCEEDED(
+            DirectX::Compress(*outRGBA.GetImages(), DXGI_FORMAT_BC7_UNORM, DirectX::TEX_COMPRESS_DEFAULT, 1.0f, outBC));
         const DirectX::ScratchImage& toSave = compressOK ? outBC : outRGBA;
 
         auto hr = DirectX::SaveToDDSFile(toSave.GetImages(), toSave.GetImageCount(), toSave.GetMetadata(),
@@ -519,6 +726,7 @@ namespace SWE {
             _mergeCache[key] = gameRel;
         }
         return gameRel;
+
 #else
         spdlog::warn("[SWE] Merge: DirectXTex not enabled, fallback");
         return fallbackWet();
@@ -780,8 +988,97 @@ namespace SWE {
         spdlog::info("[SWE] ClearCache: cache folder reset ({})", removeDir ? "removed" : "emptied");
     }
 
+    void SWE::OverlayMgr::ApplyMergedIfStillRelevant(RE::FormID actorFID, const std::string& baseSpecGame,
+                                                     const std::string& wetSpecGame, int wetBucket) {
+        if (!actorFID) return;
+
+        const std::string key = baseSpecGame + "|" + wetSpecGame + "|" + std::to_string(wetBucket);
+        std::string mergedGame;
+        {
+            std::lock_guard lk(_mergeMtx);
+            auto it = _mergeCache.find(key);
+            if (it != _mergeCache.end()) mergedGame = it->second;
+        }
+        if (mergedGame.empty()) return;
+
+        RE::Actor* a = RE::TESForm::LookupByID<RE::Actor>(actorFID);
+        if (!a) return;
+
+        bool shouldApply = false;
+        {
+            std::lock_guard lk(_mtx);
+            auto it = _actors.find(actorFID);
+            if (it == _actors.end()) return;
+
+            const ActorState& st = it->second;
+            if (!st.active) return;
+
+            const std::string currentWet = ToGameTexPath(st.chosenBody);
+            const bool baseOK = st.baseSpecBody.empty() || (st.baseSpecBody == baseSpecGame);
+            const bool wetOK = (currentWet == wetSpecGame);
+            const bool buckOK = (st.lastWetBucket == wetBucket);
+            const bool newPath = (st.lastAppliedSpecBody != mergedGame);
+
+            shouldApply = baseOK && wetOK && buckOK && newPath;
+        }
+        if (!shouldApply) return;
+
+        auto applyOnTree = [&](RE::NiAVObject* root) -> int {
+            int changed = 0;
+            if (!root) return 0;
+
+            forEachSkinGeom(root, [&](RE::BSGeometry* g) {
+                auto& rd = g->GetGeometryRuntimeData();
+                for (auto& p : rd.properties) {
+                    if (!p) continue;
+                    if (auto* l = skyrim_cast<RE::BSLightingShaderProperty*>(p.get())) {
+                        auto* mat = l->material ? static_cast<RE::BSLightingShaderMaterialBase*>(l->material) : nullptr;
+                        auto* ts = mat ? mat->textureSet.get() : nullptr;
+                        if (!ts) continue;
+
+                        const char* cur7 = ts->GetTexturePath(RE::BSTextureSet::Texture::kSpecular);
+                        std::string cur = lc_norm_path(cur7);
+                        if (cur == mergedGame) continue;
+
+                        ts->SetTexturePath(RE::BSTextureSet::Texture::kSpecular, mergedGame.c_str());
+                        ts->SetTexturePath(RE::BSTextureSet::Texture::kBacklightMask, mergedGame.c_str());
+
+                        l->SetMaterial(mat, true);
+                        l->DoClearRenderPasses();
+                        (void)l->SetupGeometry(g);
+                        (void)l->FinishSetupGeometry(g);
+                        ++changed;
+                    }
+                }
+            });
+            return changed;
+        };
+
+        int total = 0;
+        if (auto* third = a->Get3D()) total += applyOnTree(third);
+        if (a->IsPlayerRef()) {
+            if (auto* pc = a->As<RE::PlayerCharacter>())
+                if (auto* first = pc->Get3D(true)) total += applyOnTree(first);
+        }
+
+        if (total > 0) {
+            {
+                std::lock_guard lk(_mtx);
+                auto it = _actors.find(actorFID);
+                if (it != _actors.end()) it->second.lastAppliedSpecBody = mergedGame;
+            }
+            if (_aum) {
+                _aum->AddOverlayUpdate(actorFID);
+                _aum->Flush();
+            }
+            spdlog::debug("[SWE] Applied async merged spec '{}' (bucket={}) to {} geoms (actor={:08X})", mergedGame,
+                          wetBucket, total, actorFID);
+        }
+    }
+
     void OverlayMgr::OnWetnessUpdate(RE::Actor* a, float skinWet01) {
         if (!_enabled || !a) return;
+
         std::lock_guard lk(_mtx);
         auto& st = _actors[a->GetFormID()];
         st.female = isFemale(a);
@@ -792,10 +1089,14 @@ namespace SWE {
             st.active = true;
             st.lastWetBucket = -1;
 
-            if (auto* third = a->Get3D()) EnableSpecularOnSkinTree(third);
+            if (auto* third = a->Get3D()) {
+                EnableSpecularOnSkinTree(third);
+            }
             if (a->IsPlayerRef())
                 if (auto* pc = a->As<RE::PlayerCharacter>())
-                    if (auto* first = pc->Get3D(true)) EnableSpecularOnSkinTree(first);
+                    if (auto* first = pc->Get3D(true)) {
+                        EnableSpecularOnSkinTree(first);
+                    }
         } else if (!active && st.active) {
             st.active = false;
         }
@@ -803,63 +1104,64 @@ namespace SWE {
 
         if (st.baseSpecBody.empty()) {
             if (auto* third = a->Get3D()) st.baseSpecBody = GetFirstSkinSpecPath(third);
-            if (st.baseSpecBody.empty() && a->IsPlayerRef())
+            if (st.baseSpecBody.empty() && a->IsPlayerRef()) {
                 if (auto* pc = a->As<RE::PlayerCharacter>()) {
                     if (auto* first = pc->Get3D(true)) st.baseSpecBody = GetFirstSkinSpecPath(first);
                 }
-            if (st.baseSpecBody.empty()) {
-                spdlog::debug("[SWE] No base spec snapshot found; will continue with wet only.");
-            } else {
-                spdlog::debug("[SWE] Base spec snapshot = '{}'", st.baseSpecBody);
             }
+            if (st.baseSpecBody.empty())
+                spdlog::debug("[SWE] No base spec snapshot found; will continue with wet only.");
+            else
+                spdlog::debug("[SWE] Base spec snapshot = '{}'", st.baseSpecBody);
         }
 
         const int wetBucket = QuantizeWet(skinWet01);
-        if (wetBucket == st.lastWetBucket) {
-            // Do nothing if bucket unchanged?
-        } else {
-            st.lastWetBucket = wetBucket;
+        const bool bucketChanged = (wetBucket != st.lastWetBucket);
 
-            const std::string chosen = st.chosenBody;
-            const std::string wetSpecGame = ToGameTexPath(chosen);
-            const std::string baseSpecGame = st.baseSpecBody;
+        if (bucketChanged) st.lastWetBucket = wetBucket;
 
-            std::string mergedGame = wetSpecGame;
-            if (!baseSpecGame.empty()) mergedGame = GetOrBuildMergedSpec(baseSpecGame, wetSpecGame, wetBucket);
+        const std::string chosen = st.chosenBody;
+        const std::string wetSpecGame = ToGameTexPath(chosen);
+        const std::string baseSpecGame = st.baseSpecBody;
 
+        std::string mergedGame = wetSpecGame;
+        if (!baseSpecGame.empty())
+            mergedGame = GetOrBuildMergedSpecAsyncForActor(a, baseSpecGame, wetSpecGame, wetBucket);
+
+        if (mergedGame != st.lastAppliedSpecBody && !mergedGame.empty()) {
             auto setOnTree = [&](RE::NiAVObject* root) -> int {
                 int changed = 0;
                 if (!root) return 0;
-                forEachSkinGeom(root, [&](RE::BSGeometry* g) {
-                    for (auto& p : g->GetGeometryRuntimeData().properties) {
-                        if (!p) continue;
-                        if (auto* l = skyrim_cast<RE::BSLightingShaderProperty*>(p.get())) {
-                            auto* mat =
-                                l->material ? static_cast<RE::BSLightingShaderMaterialBase*>(l->material) : nullptr;
-                            auto* ts = mat ? mat->textureSet.get() : nullptr;
-                            if (!ts) continue;
+                std::function<void(RE::NiAVObject*)> dfs = [&](RE::NiAVObject* o) {
+                    if (auto* g = o->AsGeometry()) {
+                        for (auto& p : g->GetGeometryRuntimeData().properties) {
+                            if (!p) continue;
+                            if (auto* l = skyrim_cast<RE::BSLightingShaderProperty*>(p.get())) {
+                                auto* mat =
+                                    l->material ? static_cast<RE::BSLightingShaderMaterialBase*>(l->material) : nullptr;
+                                auto* ts = mat ? mat->textureSet.get() : nullptr;
+                                if (!ts) continue;
 
-                            const char* cur7 = ts->GetTexturePath(RE::BSTextureSet::Texture::kSpecular);
-                            std::string curSpec = lc_norm_path(cur7);
-                            if (curSpec != mergedGame) {
-                                ts->SetTexturePath(RE::BSTextureSet::Texture::kSpecular, mergedGame.c_str());
-                                ts->SetTexturePath(RE::BSTextureSet::Texture::kBacklightMask, mergedGame.c_str());
+                                const char* cur7 = ts->GetTexturePath(RE::BSTextureSet::Texture::kSpecular);
+                                std::string curSpec = lc_norm_path(cur7);
+                                if (curSpec != mergedGame) {
+                                    ts->SetTexturePath(RE::BSTextureSet::Texture::kSpecular, mergedGame.c_str());
+                                    ts->SetTexturePath(RE::BSTextureSet::Texture::kBacklightMask, mergedGame.c_str());
 
-                                const char* d0 = ts->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse);
-                                const char* s7 = ts->GetTexturePath(RE::BSTextureSet::Texture::kSpecular);
-                                const char* b8 = ts->GetTexturePath(RE::BSTextureSet::Texture::kBacklightMask);
-                                spdlog::info("[SWE] GEOM='{}' d0='{}' s7='{}' b8='{}'", g->name.c_str(), d0 ? d0 : "",
-                                             s7 ? s7 : "", b8 ? b8 : "");
-
-                                l->SetMaterial(mat, true);
-                                l->DoClearRenderPasses();
-                                (void)l->SetupGeometry(g);
-                                (void)l->FinishSetupGeometry(g);
-                                ++changed;
+                                    l->SetMaterial(mat, true);
+                                    l->DoClearRenderPasses();
+                                    (void)l->SetupGeometry(g);
+                                    (void)l->FinishSetupGeometry(g);
+                                    ++changed;
+                                }
                             }
                         }
                     }
-                });
+                    if (auto* n = o->AsNode())
+                        for (auto& ch : n->GetChildren())
+                            if (ch) dfs(ch.get());
+                };
+                dfs(root);
                 return changed;
             };
 
@@ -869,40 +1171,335 @@ namespace SWE {
                 if (auto* pc = a->As<RE::PlayerCharacter>())
                     if (auto* first = pc->Get3D(true)) total += setOnTree(first);
 
-            spdlog::debug("[SWE] Applied merged spec (bucket={}) to {} geoms", wetBucket, total);
+            if (total > 0) {
+                st.lastAppliedSpecBody = mergedGame;
+                spdlog::debug("[SWE] Applied spec '{}' (bucket={}) to {} geoms", mergedGame, wetBucket, total);
+            }
         }
 
-        const float gloss = std::clamp(60.0f + skinWet01 * 200.0f, 0.f, 400.f);
-        const float spec = std::clamp(2.5f + skinWet01 * 7.5f, 0.f, 100.f);
+        const float gloss = std::clamp(60.0f + skinWet01 * 200.0f, Settings::minGlossiness.load(), Settings::maxGlossiness.load());
+        const float spec = std::clamp(0.90f + skinWet01 * Settings::specularScaleBoost.load(), Settings::minSpecularStrength.load(), Settings::maxSpecularStrength.load());
 
-        auto setCaps = [&](RE::NiAVObject* root) {
+        auto setPBR = [&](RE::NiAVObject* root) {
             if (!root) return;
-            forEachSkinGeom(root, [&](RE::BSGeometry* g) {
-                for (auto& p : g->GetGeometryRuntimeData().properties) {
-                    if (!p) continue;
-                    if (auto* l = skyrim_cast<RE::BSLightingShaderProperty*>(p.get())) {
-                        auto* mat = l->material ? static_cast<RE::BSLightingShaderMaterialBase*>(l->material) : nullptr;
-                        if (!mat) continue;
-                        auto* sp = static_cast<RE::BSShaderProperty*>(l);
+            std::function<void(RE::NiAVObject*)> dfs = [&](RE::NiAVObject* o) {
+                if (auto* g = o->AsGeometry()) {
+                    for (auto& p : g->GetGeometryRuntimeData().properties) {
+                        if (!p) continue;
+                        if (auto* l = skyrim_cast<RE::BSLightingShaderProperty*>(p.get())) {
+                            auto* mat =
+                                l->material ? static_cast<RE::BSLightingShaderMaterialBase*>(l->material) : nullptr;
+                            if (!mat) continue;
 
-                        sp->flags.set(RE::BSShaderProperty::EShaderPropertyFlag::kSpecular);
-                        sp->SetFlags(RE::BSShaderProperty::EShaderPropertyFlag8::kSpecular, true);
-
-                        mat->specularColor = {1.0f, 1.0f, 1.0f};
-                        mat->specularPower = std::max(mat->specularPower, gloss);
-                        mat->specularColorScale = std::max(mat->specularColorScale, spec);
-
-                        l->SetMaterial(mat, true);
-                        l->DoClearRenderPasses();
-                        (void)l->SetupGeometry(g);
-                        (void)l->FinishSetupGeometry(g);
+                            auto* sp = static_cast<RE::BSShaderProperty*>(l);
+                            sp->flags.set(RE::BSShaderProperty::EShaderPropertyFlag::kSpecular);
+                            mat->specularPower = std::max(mat->specularPower, gloss);
+                            mat->specularColorScale = std::max(mat->specularColorScale, spec);
+                            l->SetMaterial(mat, true);
+                        }
                     }
                 }
-            });
+                if (auto* n = o->AsNode())
+                    for (auto& ch : n->GetChildren())
+                        if (ch) dfs(ch.get());
+            };
+            dfs(root);
         };
-        if (auto* third = a->Get3D()) setCaps(third);
+        if (auto* third = a->Get3D()) setPBR(third);
         if (a->IsPlayerRef())
             if (auto* pc = a->As<RE::PlayerCharacter>())
-                if (auto* first = pc->Get3D(true)) setCaps(first);
+                if (auto* first = pc->Get3D(true)) setPBR(first);
+    }
+
+    std::string OverlayMgr::RequestMergedOrQueue(const std::string& baseSpecGame, const std::string& wetSpecGame,
+                                                 int wetBucket, RE::FormID actorFID) {
+        if (baseSpecGame.empty() || wetSpecGame.empty()) return wetSpecGame;
+
+        const std::string key = baseSpecGame + "|" + wetSpecGame + "|" + std::to_string(wetBucket);
+
+        {
+            std::lock_guard lk(_mergeMtx);
+            if (auto it = _mergeCache.find(key); it != _mergeCache.end()) return it->second;
+        }
+
+        std::error_code ec;
+        const fs::path outDir = fs::path("Data/Textures/DynamicWetness/_cache");
+        fs::create_directories(outDir, ec);
+
+        auto wetOnlyPath = [&]() -> std::string {
+            fs::path src = "Data";
+            src /= (wetSpecGame.rfind("textures/", 0) == 0 ? wetSpecGame : ("textures/" + wetSpecGame));
+            auto dst = outDir / ("spec_wetonly_" + std::to_string(std::hash<std::string>{}(key)) + ".dds");
+
+            std::error_code cec;
+            fs::copy_file(src, dst, fs::copy_options::overwrite_existing, cec);
+            std::string gameRel;
+            if (!cec) {
+                gameRel = dst.generic_string();
+                std::transform(gameRel.begin(), gameRel.end(), gameRel.begin(), ::tolower);
+                if (auto pos = gameRel.find("data/"); pos != std::string::npos) gameRel.erase(0, pos + 5);
+            } else {
+                gameRel = (fs::path("Data") /
+                           (wetSpecGame.rfind("textures/", 0) == 0 ? wetSpecGame : "textures/" + wetSpecGame))
+                              .generic_string();
+                std::transform(gameRel.begin(), gameRel.end(), gameRel.begin(), ::tolower);
+                if (auto pos = gameRel.find("data/"); pos != std::string::npos) gameRel.erase(0, pos + 5);
+            }
+
+            {
+                std::lock_guard lk2(_mergeMtx);
+                if (_mergeCache.find(key) == _mergeCache.end()) _mergeCache[key] = gameRel;
+            }
+            return gameRel;
+        }();
+
+        EnqueueMerge(MergeJob{key, baseSpecGame, wetSpecGame, wetBucket, actorFID});
+        return wetOnlyPath;
+    }
+
+    std::string OverlayMgr::GetOrBuildMergedSpecAsyncForActor(RE::Actor* a, const std::string& baseSpecGame,
+                                                              const std::string& wetSpecGame, int wetBucket) {
+        const RE::FormID fid = a ? a->GetFormID() : 0;
+        return RequestMergedOrQueue(baseSpecGame, wetSpecGame, wetBucket, fid);
+    }
+
+    std::string OverlayMgr::BuildMergedSpecSync(const std::string& key, const std::string& baseSpecGame,
+                                                const std::string& wetSpecGame, int wetBucket) {
+        std::error_code ec;
+        const fs::path outDir = fs::path("Data/Textures/DynamicWetness/_cache");
+        fs::create_directories(outDir, ec);
+
+        auto fallbackWet = [&](const char* why) -> std::string {
+            spdlog::warn("[SWE] Merge: fallback ({}) -> using wet-only copy", why ? why : "unknown");
+            fs::path src = "Data";
+            src /= (wetSpecGame.rfind("textures/", 0) == 0 ? wetSpecGame : ("textures/" + wetSpecGame));
+            auto dst = outDir / ("spec_wetonly_" + std::to_string(std::hash<std::string>{}(key)) + ".dds");
+
+            std::error_code copyEC;
+            fs::copy_file(src, dst, fs::copy_options::overwrite_existing, copyEC);
+
+            std::string gameRel =
+                (copyEC ? (fs::path("Data") /
+                           (wetSpecGame.rfind("textures/", 0) == 0 ? wetSpecGame : "textures/" + wetSpecGame))
+                        : dst)
+                    .generic_string();
+
+            std::transform(gameRel.begin(), gameRel.end(), gameRel.begin(), ::tolower);
+            if (auto pos = gameRel.find("data/"); pos != std::string::npos) gameRel.erase(0, pos + 5);
+
+            {
+                std::lock_guard lk(_mergeMtx);
+                _mergeCache[key] = gameRel;
+            }
+            return gameRel;
+        };
+
+#if defined(SWE_USE_DIRECTX_TEX)
+        const fs::path outPath = outDir / ("spec_" + std::to_string(std::hash<std::string>{}(key)) + ".dds");
+
+        auto toAbs = [](const std::string& gamePath) {
+            fs::path p = "Data";
+            p /= (gamePath.rfind("textures/", 0) == 0 ? gamePath : ("textures/" + gamePath));
+            return p;
+        };
+
+        ScratchImage imgBase, imgWet;
+        TexMetadata metaB{}, metaW{};
+        if (FAILED(LoadFromDDSFile(toAbs(baseSpecGame).c_str(), DDS_FLAGS_NONE, &metaB, imgBase)))
+            return fallbackWet("Load(base) failed");
+        if (FAILED(LoadFromDDSFile(toAbs(wetSpecGame).c_str(), DDS_FLAGS_NONE, &metaW, imgWet)))
+            return fallbackWet("Load(wet) failed");
+
+        ScratchImage baseLinear, wetLinear;
+        const ScratchImage* baseSrc = &imgBase;
+        const ScratchImage* wetSrc = &imgWet;
+
+        if (IsCompressed(metaB.format)) {
+            if (FAILED(Decompress(imgBase.GetImages(), imgBase.GetImageCount(), metaB, DXGI_FORMAT_R8G8B8A8_UNORM,
+                                  baseLinear)))
+                return fallbackWet("Decompress(base) failed");
+            baseSrc = &baseLinear;
+        }
+        if (IsCompressed(metaW.format)) {
+            if (FAILED(Decompress(imgWet.GetImages(), imgWet.GetImageCount(), metaW, DXGI_FORMAT_R8G8B8A8_UNORM,
+                                  wetLinear)))
+                return fallbackWet("Decompress(wet) failed");
+            wetSrc = &wetLinear;
+        }
+
+        const DXGI_FORMAT kFmt = DXGI_FORMAT_R8G8B8A8_UNORM;
+        ScratchImage baseRGBA, wetRGBA;
+
+        const auto& mb = baseSrc->GetMetadata();
+        const auto& mw = wetSrc->GetMetadata();
+
+        TEX_FILTER_FLAGS baseFilter = TEX_FILTER_DEFAULT;
+        TEX_FILTER_FLAGS wetFilter = TEX_FILTER_DEFAULT;
+
+        if (IsSRGB(mb.format) || IsSRGB(kFmt)) baseFilter = static_cast<TEX_FILTER_FLAGS>(baseFilter | TEX_FILTER_SRGB);
+        if (IsSRGB(mw.format) || IsSRGB(kFmt)) wetFilter = static_cast<TEX_FILTER_FLAGS>(wetFilter | TEX_FILTER_SRGB);
+
+        auto save_wetonly_expanded = [&](const char* why) -> std::string {
+            spdlog::warn("[SWE] Merge: fallback ({} -> expanding wet alpha->RGB)", why ? why : "unknown");
+
+            ScratchImage wetOnlyRGBA;
+            if (FAILED(Convert(wetSrc->GetImages(), wetSrc->GetImageCount(), mw, kFmt, wetFilter, TEX_THRESHOLD_DEFAULT,
+                               wetOnlyRGBA))) {
+                return fallbackWet("Convert(wet) failed in expanded fallback");
+            }
+
+            const Image* wi = wetOnlyRGBA.GetImage(0, 0, 0);
+            for (size_t y = 0; y < wi->height; ++y) {
+                uint8_t* row = wi->pixels + y * wi->rowPitch;
+                for (size_t x = 0; x < wi->width; ++x) {
+                    uint8_t* px = row + 4 * x;
+                    const uint8_t a = px[3];
+                    const bool rgbDark = (px[0] | px[1] | px[2]) < 5;
+                    if (rgbDark) {
+                        px[0] = a;
+                        px[1] = a;
+                        px[2] = a;
+                    }
+                    px[3] = std::max<uint8_t>(px[3], a);
+                }
+            }
+
+            std::error_code makeDirEC;
+            fs::create_directories(outDir, makeDirEC);
+            fs::path dst = outDir / ("spec_wetonly_exp_" + std::to_string(std::hash<std::string>{}(key)) + ".dds");
+
+            HRESULT hr = E_FAIL;
+            {
+                ScratchImage bc7;
+                hr = Compress(wetOnlyRGBA.GetImages(), wetOnlyRGBA.GetImageCount(), wetOnlyRGBA.GetMetadata(),
+                              DXGI_FORMAT_BC7_UNORM, TEX_COMPRESS_DEFAULT, 0.5f, bc7);
+                if (SUCCEEDED(hr)) {
+                    hr = SaveToDDSFile(bc7.GetImages(), bc7.GetImageCount(), bc7.GetMetadata(),
+                                       DDS_FLAGS_FORCE_DX10_EXT, dst.c_str());
+                }
+            }
+            if (FAILED(hr)) {
+                hr = SaveToDDSFile(wetOnlyRGBA.GetImages(), wetOnlyRGBA.GetImageCount(), wetOnlyRGBA.GetMetadata(),
+                                   DDS_FLAGS_FORCE_DX10_EXT, dst.c_str());
+                if (FAILED(hr)) {
+                    return fallbackWet("Save(expanded wet) failed");
+                }
+            }
+
+            std::string gameRel = dst.generic_string();
+            std::transform(gameRel.begin(), gameRel.end(), gameRel.begin(), ::tolower);
+            if (auto pos = gameRel.find("data/"); pos != std::string::npos) gameRel.erase(0, pos + 5);
+
+            {
+                std::lock_guard lk(_mergeMtx);
+                _mergeCache[key] = gameRel;
+            }
+            return gameRel;
+        };
+
+        if (FAILED(Convert(baseSrc->GetImages(), baseSrc->GetImageCount(), mb, kFmt, baseFilter, TEX_THRESHOLD_DEFAULT,
+                           baseRGBA)))
+            return fallbackWet("Convert(base) failed");
+        if (FAILED(Convert(wetSrc->GetImages(), wetSrc->GetImageCount(), mw, kFmt, wetFilter, TEX_THRESHOLD_DEFAULT,
+                           wetRGBA)))
+            return fallbackWet("Convert(wet) failed");
+
+        const Image* bi = baseRGBA.GetImage(0, 0, 0);
+        const Image* wi = wetRGBA.GetImage(0, 0, 0);
+
+        ScratchImage wetResized;
+        const Image* wImg = wi;
+        if (wi->width != bi->width || wi->height != bi->height) {
+            if (FAILED(Resize(wetRGBA.GetImages(), wetRGBA.GetImageCount(), wetRGBA.GetMetadata(), bi->width,
+                              bi->height, TEX_FILTER_DEFAULT, wetResized))) {
+                return save_wetonly_expanded("Resize(wet->base) failed");
+            }
+            wImg = wetResized.GetImage(0, 0, 0);
+        }
+
+        {
+            size_t darkCount = 0, sample = 0;
+            const size_t maxProbe = std::min<size_t>(wImg->width * wImg->height, 4096);
+            for (size_t i = 0; i < maxProbe; ++i) {
+                size_t idx = (i * 7919) % (wImg->width * wImg->height);
+                size_t y = idx / wImg->width, x = idx % wImg->width;
+                const uint8_t* px = wImg->pixels + y * wImg->rowPitch + x * 4;
+                if ((px[0] | px[1] | px[2]) < 5 && px[3] > 5) ++darkCount;
+                ++sample;
+            }
+            if (sample > 0 && darkCount > (sample * 3) / 4) {
+                return save_wetonly_expanded("Wet RGB mostly black, alpha carries data");
+            }
+        }
+
+        ScratchImage outImg;
+        if (FAILED(outImg.Initialize2D(kFmt, bi->width, bi->height, 1, 1)))
+            return fallbackWet("Initialize2D(out) failed");
+
+        static constexpr float kBucketScale[] = {0.35f, 0.55f, 0.75f, 0.90f, 1.0f};
+        const float s = (wetBucket >= 0 && wetBucket < (int)std::size(kBucketScale)) ? kBucketScale[wetBucket] : 0.75f;
+
+        for (size_t y = 0; y < bi->height; ++y) {
+            const uint8_t* brow = bi->pixels + y * bi->rowPitch;
+            const uint8_t* wrow = wImg->pixels + y * wImg->rowPitch;
+            uint8_t* orow = outImg.GetImage(0, 0, 0)->pixels + y * outImg.GetImage(0, 0, 0)->rowPitch;
+
+            for (size_t x = 0; x < bi->width; ++x) {
+                const uint8_t* bpx = brow + 4 * x;
+                const uint8_t* wpx = wrow + 4 * x;
+                uint8_t* opx = orow + 4 * x;
+
+                const float br = bpx[0] / 255.0f, bg = bpx[1] / 255.0f, bb = bpx[2] / 255.0f, ba = bpx[3] / 255.0f;
+                const float wr = wpx[0] / 255.0f, wg = wpx[1] / 255.0f, wb = wpx[2] / 255.0f, wa = wpx[3] / 255.0f;
+
+                const float mask = std::clamp(wa * s, 0.0f, 1.0f);
+
+                float wetLuma = (wr + wg + wb) / 3.0f;
+                const float wetStrength = (wr + wg + wb > 0.01f) ? wetLuma : wa;
+
+                const float t = std::clamp(mask, 0.0f, 1.0f);
+                float or_ = std::lerp(br, std::max(wr, wetStrength), t);
+                float og_ = std::lerp(bg, std::max(wg, wetStrength), t);
+                float ob_ = std::lerp(bb, std::max(wb, wetStrength), t);
+
+                float oa_ = std::clamp(ba * (1.0f - t) + std::max(ba, wa) * t, 0.0f, 1.0f);
+
+                opx[0] = static_cast<uint8_t>(std::clamp(or_, 0.0f, 1.0f) * 255.0f + 0.5f);
+                opx[1] = static_cast<uint8_t>(std::clamp(og_, 0.0f, 1.0f) * 255.0f + 0.5f);
+                opx[2] = static_cast<uint8_t>(std::clamp(ob_, 0.0f, 1.0f) * 255.0f + 0.5f);
+                opx[3] = static_cast<uint8_t>(oa_ * 255.0f + 0.5f);
+            }
+        }
+
+        HRESULT hr = E_FAIL;
+        {
+            ScratchImage bc7;
+            hr = Compress(outImg.GetImages(), outImg.GetImageCount(), outImg.GetMetadata(), DXGI_FORMAT_BC7_UNORM,
+                          TEX_COMPRESS_DEFAULT, 0.5f, bc7);
+            if (SUCCEEDED(hr)) {
+                hr = SaveToDDSFile(bc7.GetImages(), bc7.GetImageCount(), bc7.GetMetadata(), DDS_FLAGS_FORCE_DX10_EXT,
+                                   outPath.c_str());
+            }
+        }
+        if (FAILED(hr)) {
+            hr = SaveToDDSFile(outImg.GetImages(), outImg.GetImageCount(), outImg.GetMetadata(),
+                               DDS_FLAGS_FORCE_DX10_EXT, outPath.c_str());
+            if (FAILED(hr)) {
+                return fallbackWet("Save(out) failed");
+            }
+        }
+
+        std::string gameRel = outPath.generic_string();
+        std::transform(gameRel.begin(), gameRel.end(), gameRel.begin(), ::tolower);
+        if (auto pos = gameRel.find("data/"); pos != std::string::npos) gameRel.erase(0, pos + 5);
+
+        {
+            std::lock_guard lk(_mergeMtx);
+            _mergeCache[key] = gameRel;
+        }
+        return gameRel;
+#else
+        return fallbackWet("SWE_USE_DIRECTX_TEX not defined");
+#endif
     }
 }

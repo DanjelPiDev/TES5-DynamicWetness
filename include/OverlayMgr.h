@@ -22,6 +22,7 @@ namespace SWE {
         std::string baseSpecBody;
         std::string baseSpecHand;
         int lastWetBucket{-1};
+        std::string lastAppliedSpecBody;
     };
 
     class OverlayMgr {
@@ -52,6 +53,39 @@ namespace SWE {
 
     private:
         OverlayMgr() = default;
+
+        // ======================== Merge job for background thread ========================
+        struct MergeJob {
+            std::string key;
+            std::string baseSpec;
+            std::string wetSpec;
+            int bucket{0};
+            RE::FormID actor{0};
+        };
+
+        std::mutex _jobMtx;
+        std::condition_variable _jobCv;
+        std::deque<MergeJob> _jobQ;
+        std::unordered_set<std::string> _inflightKeys;
+        std::atomic<bool> _mergeAlive{false};
+        std::thread _mergeThread;
+
+        void StartMergeWorker();
+        void StopMergeWorker();
+        void EnqueueMerge(MergeJob j);
+
+        std::string RequestMergedOrQueue(const std::string& baseSpecGame, const std::string& wetSpecGame, int wetBucket,
+                                         RE::FormID actorFID);
+
+        std::string BuildMergedSpecSync(const std::string& key, const std::string& baseSpecGame,
+                                        const std::string& wetSpecGame, int wetBucket);
+
+        void ApplyMergedIfStillRelevant(RE::FormID actorFID, const std::string& baseSpecGame,
+                                        const std::string& wetSpecGame, int bucket);
+
+        std::string GetOrBuildMergedSpecAsyncForActor(RE::Actor* a, const std::string& baseSpecGame, const std::string& wetSpecGame,int wetBucket);
+        
+        // ======================== End Merge job ========================
 
         IOverlayInterface* _ovl{nullptr};
         IActorUpdateManager* _aum{nullptr};
