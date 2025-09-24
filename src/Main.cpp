@@ -72,9 +72,9 @@ static void RequestRMInterfaces() {
 
     if (ex.interfaceMap) {
         SWE::OverlayMgr::Get()->OnInterfaceMap(ex.interfaceMap);
-        spdlog::info("[SWE] RaceMenu interfaces acquired via InterfaceExchange (receiver ok)");
+        spdlog::info("RaceMenu interfaces acquired via InterfaceExchange (receiver ok)");
     } else {
-        spdlog::warn("[SWE] OverlayMgr: No overlays interface available (InterfaceExchange returned null)");
+        spdlog::warn("OverlayMgr: No overlays interface available (InterfaceExchange returned null)");
     }
 }
 

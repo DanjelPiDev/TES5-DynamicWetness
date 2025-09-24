@@ -3,21 +3,21 @@
 #include <algorithm>
 #include <cctype>
 
+#define SWE_USE_DIRECTX_TEX 1
+
 #if defined(SWE_USE_DIRECTX_TEX)
     #include <DirectXTex.h>
-    using namespace DirectX;
+using namespace DirectX;
 #endif
 
 #include "RE/B/BSLightingShaderMaterialBase.h"
 #include "RE/B/BSTextureSet.h"
-
 #include "Settings.h"
 
 using std::string;
 using std::vector;
 
 namespace fs = std::filesystem;
-
 
 namespace SWE {
     static constexpr bool kWFR_Mode = true;
@@ -82,7 +82,8 @@ namespace SWE {
                 for (auto& prop : rd.properties) {
                     if (!prop) continue;
                     if (auto* l = skyrim_cast<RE::BSLightingShaderProperty*>(prop.get())) {
-                        if (auto* mat = l->material ? static_cast<RE::BSLightingShaderMaterialBase*>(l->material) : nullptr) {
+                        if (auto* mat =
+                                l->material ? static_cast<RE::BSLightingShaderMaterialBase*>(l->material) : nullptr) {
                             auto* sp = static_cast<RE::BSShaderProperty*>(l);
                             sp->flags.set(RE::BSShaderProperty::EShaderPropertyFlag::kSpecular);
                             sp->SetFlags(RE::BSShaderProperty::EShaderPropertyFlag8::kSpecular, true);
@@ -91,7 +92,7 @@ namespace SWE {
                             mat->specularColorScale = std::max(mat->specularColorScale, 100.0f);
                             mat->specularPower = std::max(mat->specularPower, 1000.0f);
 
-                            spdlog::debug("[SWE] specColor=({:.2f},{:.2f},{:.2f}) scale={:.1f} power={:.1f}",
+                            spdlog::debug("specColor=({:.2f},{:.2f},{:.2f}) scale={:.1f} power={:.1f}",
                                           mat->specularColor.red, mat->specularColor.green, mat->specularColor.blue,
                                           mat->specularColorScale, mat->specularPower);
 
@@ -122,11 +123,11 @@ namespace SWE {
 
             std::error_code ec;
             if (std::filesystem::exists(std::filesystem::path("data") / q, ec)) {
-                spdlog::debug("[SWE] OverlayMgr: remapped spec '{}' -> diffuse '{}'", p, q);
+                spdlog::debug("OverlayMgr: remapped spec '{}' -> diffuse '{}'", p, q);
                 return q;
             } else {
                 spdlog::warn(
-                    "[SWE] OverlayMgr: '{}' looks like spec; matching diffuse '{}' not found -> skipping overlay", p,
+                    "OverlayMgr: '{}' looks like spec; matching diffuse '{}' not found -> skipping overlay", p,
                     q);
                 return {};
             }
@@ -142,10 +143,10 @@ namespace SWE {
         auto probe = [&](bool firstPerson, const char* tag) {
             GVString gv;
             ni->GetSkinOverride(refr, female, firstPerson, SLOT_BODY, kKey_TextureSet, kIdx_SpecularTex, gv);
-            spdlog::info("[SWE] {} BODY spec idx7 = '{}'", tag, gv.out);
+            spdlog::info("{} BODY spec idx7 = '{}'", tag, gv.out);
             gv.out.clear();
             ni->GetSkinOverride(refr, female, firstPerson, SLOT_HANDS, kKey_TextureSet, kIdx_SpecularTex, gv);
-            spdlog::info("[SWE] {} HAND spec idx7 = '{}'", tag, gv.out);
+            spdlog::info("{} HAND spec idx7 = '{}'", tag, gv.out);
         };
         probe(false, "3rd");
         if (a->IsPlayerRef()) probe(true, "1st");
@@ -251,7 +252,7 @@ namespace SWE {
                             ts->SetTexturePath(RE::BSTextureSet::Texture::kBacklightMask, specPath.c_str());
                             const char* p7 = ts->GetTexturePath(RE::BSTextureSet::Texture::kSpecular);
                             const char* p8 = ts->GetTexturePath(RE::BSTextureSet::Texture::kBacklightMask);
-                            spdlog::debug("[SWE] geom spec(7)='{}' backlight(8)='{}'", p7 ? p7 : "", p8 ? p8 : "");
+                            spdlog::debug("geom spec(7)='{}' backlight(8)='{}'", p7 ? p7 : "", p8 ? p8 : "");
                         }
 
                         auto* sp = static_cast<RE::BSShaderProperty*>(l);
@@ -277,7 +278,7 @@ namespace SWE {
             if (auto* pc = a->As<RE::PlayerCharacter>())
                 if (auto* first = pc->Get3D(true)) total += setOnTree(first);
 
-        spdlog::debug("[SWE] ApplyWetDirectToSkin patched {} geoms (forceWhiteDebug={})", total, forceWhiteDebug);
+        spdlog::debug("ApplyWetDirectToSkin patched {} geoms (forceWhiteDebug={})", total, forceWhiteDebug);
         return total;
     }
 
@@ -286,6 +287,7 @@ namespace SWE {
         if (!_mergeAlive.compare_exchange_strong(expected, true)) return;
 
         _mergeThread = std::thread([this]() {
+            spdlog::info("MergeWorker: START");
             while (_mergeAlive.load()) {
                 MergeJob job;
                 {
@@ -296,7 +298,11 @@ namespace SWE {
                     _jobQ.pop_front();
                 }
 
+                spdlog::info("MergeWorker: DEQUEUED key='{}' bucket={} base='{}' wet='{}'", job.key, job.bucket,
+                             job.baseSpec, job.wetSpec);
+
                 std::string outGame = BuildMergedSpecSync(job.key, job.baseSpec, job.wetSpec, job.bucket);
+                spdlog::info("MergeWorker: BUILT -> '{}'", outGame);
 
                 if (!outGame.empty() && job.actor != 0) {
                     SKSE::GetTaskInterface()->AddTask([this, job]() {
@@ -350,11 +356,10 @@ namespace SWE {
             _cbRegistered = true;
         }
 
-        spdlog::info("[SWE] IF: ovl={}, aum={}, ni={}", (void*)_ovl, (void*)_aum, (void*)_ni);
+        spdlog::info("IF: ovl={}, aum={}, ni={}", (void*)_ovl, (void*)_aum, (void*)_ni);
     }
 
-    void OverlayMgr::ensureInterfaces() {
-    }
+    void OverlayMgr::ensureInterfaces() {}
 
     bool OverlayMgr::isFemale(const RE::Actor* a) {
         if (!a) return false;
@@ -428,7 +433,7 @@ namespace SWE {
         }
 
         auto fallbackWet = [&](const char* why) -> std::string {
-            spdlog::warn("[SWE] Merge: fallback ({}) -> using wet-only copy", why ? why : "unknown");
+            spdlog::warn("Merge: fallback ({}) -> using wet-only copy", why ? why : "unknown");
             std::filesystem::path src = "Data";
             src /= (wetSpec.rfind("textures/", 0) == 0 ? wetSpec : ("textures/" + wetSpec));
 
@@ -437,7 +442,7 @@ namespace SWE {
             std::error_code copyEC;
             std::filesystem::copy_file(src, dst, std::filesystem::copy_options::overwrite_existing, copyEC);
             if (copyEC) {
-                spdlog::warn("[SWE] Fallback copy failed: {}", copyEC.message());
+                spdlog::warn("Fallback copy failed: {}", copyEC.message());
                 std::string gameRel = (std::filesystem::path("Data") /
                                        (wetSpec.rfind("textures/", 0) == 0 ? wetSpec : "textures/" + wetSpec))
                                           .generic_string();
@@ -457,11 +462,11 @@ namespace SWE {
         };
 
 #if defined(SWE_USE_DIRECTX_TEX)
-        
+
         const std::filesystem::path outPath =
             outDir / ("spec_" + std::to_string(std::hash<std::string>{}(key)) + ".dds");
 
-        spdlog::info("[SWE] Merging spec '{}' + '{}' (bucket {})", baseSpec, wetSpec, wetBucket);
+        spdlog::info("Merging spec '{}' + '{}' (bucket {})", baseSpec, wetSpec, wetBucket);
 
         auto toAbs = [](const std::string& gamePath) {
             std::filesystem::path p = "Data";
@@ -471,11 +476,11 @@ namespace SWE {
 
         DirectX::ScratchImage imgBase, imgWet;
         if (FAILED(DirectX::LoadFromDDSFile(toAbs(baseSpec).c_str(), DirectX::DDS_FLAGS_NONE, nullptr, imgBase))) {
-            spdlog::warn("[SWE] Merge: failed to load base '{}', fallback to wet only", baseSpec);
+            spdlog::warn("Merge: failed to load base '{}', fallback to wet only", baseSpec);
             return fallbackWet("LoadFromDDS(base) failed");
         }
         if (FAILED(DirectX::LoadFromDDSFile(toAbs(wetSpec).c_str(), DirectX::DDS_FLAGS_NONE, nullptr, imgWet))) {
-            spdlog::warn("[SWE] Merge: failed to load wet '{}', fallback to wet only", wetSpec);
+            spdlog::warn("Merge: failed to load wet '{}', fallback to wet only", wetSpec);
             return fallbackWet("LoadFromDDS(wet) failed");
         }
 
@@ -517,7 +522,7 @@ namespace SWE {
             wetFilter = static_cast<DirectX::TEX_FILTER_FLAGS>(wetFilter | DirectX::TEX_FILTER_SRGB);
 
         auto save_wetonly_expanded = [&](const char* why) -> std::string {
-            spdlog::warn("[SWE] Merge: fallback ({} -> expanding wet alpha->RGB)", why ? why : "unknown");
+            spdlog::warn("Merge: fallback ({} -> expanding wet alpha->RGB)", why ? why : "unknown");
 
             DirectX::ScratchImage wetOnlyRGBA;
             if (FAILED(DirectX::Convert(wetSrc->GetImages(), wetSrc->GetImageCount(), mw, kFmt, wetFilter,
@@ -642,7 +647,7 @@ namespace SWE {
                     std::lock_guard lk(_mergeMtx);
                     _mergeCache[key] = gameRel;
                 }
-                spdlog::info("[SWE] Merge: wrote expanded wet-only {}", gameRel);
+                spdlog::info("Merge: wrote expanded wet-only {}", gameRel);
                 return gameRel;
             };
 
@@ -650,7 +655,7 @@ namespace SWE {
             auto hr = DirectX::SaveToDDSFile(toSave.GetImages(), toSave.GetImageCount(), toSave.GetMetadata(),
                                              DirectX::DDS_FLAGS_NONE, dst.c_str());
             if (FAILED(hr)) {
-                spdlog::error("[SWE] Merge: SaveToDDS(wetonly expanded) failed: 0x{:08X}", (uint32_t)hr);
+                spdlog::error("Merge: SaveToDDS(wetonly expanded) failed: 0x{:08X}", (uint32_t)hr);
                 return fallbackWet("SaveToDDS(wetonly expanded) failed");
             }
 
@@ -705,17 +710,17 @@ namespace SWE {
         }
 
         DirectX::ScratchImage outBC;
-        const bool compressOK = SUCCEEDED(
-            DirectX::Compress(*outRGBA.GetImages(), DXGI_FORMAT_BC7_UNORM, DirectX::TEX_COMPRESS_DEFAULT, 1.0f, outBC));
-        const DirectX::ScratchImage& toSave = compressOK ? outBC : outRGBA;
+
+        const bool compressOK = SUCCEEDED(DirectX::Compress(*outRGBA.GetImages(), DXGI_FORMAT_BC7_UNORM, DirectX::TEX_COMPRESS_DEFAULT, 1.0f, outBC));
+        const auto& toSave = compressOK ? outBC : outRGBA;
 
         auto hr = DirectX::SaveToDDSFile(toSave.GetImages(), toSave.GetImageCount(), toSave.GetMetadata(),
-                                         DirectX::DDS_FLAGS_NONE, outPath.c_str());
+                                         DirectX::DDS_FLAGS_FORCE_DX10_EXT, outPath.c_str());
         if (FAILED(hr)) {
-            spdlog::error("[SWE] Merge: SaveToDDSFile failed: 0x{:08X} -> {}", (uint32_t)hr, outPath.string());
+            spdlog::error("Merge: SaveToDDSFile failed: 0x{:08X} -> {}", (uint32_t)hr, outPath.string());
             return fallbackWet("SaveToDDSFile failed");
         }
-        spdlog::info("[SWE] Merge: wrote {}", outPath.string());
+        spdlog::info("Merge: wrote {}", outPath.string());
 
         std::string gameRel = outPath.generic_string();
         std::transform(gameRel.begin(), gameRel.end(), gameRel.begin(), ::tolower);
@@ -728,7 +733,7 @@ namespace SWE {
         return gameRel;
 
 #else
-        spdlog::warn("[SWE] Merge: DirectXTex not enabled, fallback");
+        spdlog::warn("Merge: DirectXTex not enabled, fallback");
         return fallbackWet();
 #endif
     }
@@ -765,7 +770,7 @@ namespace SWE {
 
         const std::string gamePath = ToOverlayDiffusePathOrEmpty(ddsPath);
         if (gamePath.empty()) {
-            spdlog::warn("[SWE] OverlayMgr: skipping overlay '{}'", ddsPath);
+            spdlog::warn("OverlayMgr: skipping overlay '{}'", ddsPath);
             return;
         }
 
@@ -816,7 +821,7 @@ namespace SWE {
             mgr->_aum->AddOverlayUpdate(a->GetFormID());
             mgr->_aum->Flush();
         }
-        spdlog::debug("[SWE] OverlayInstalledCB: applied={} (actor={:08X})", applied, a->GetFormID());
+        spdlog::debug("OverlayInstalledCB: applied={} (actor={:08X})", applied, a->GetFormID());
     }
 
     void OverlayMgr::ensureOverlays(RE::Actor* a, ActorState& st) {
@@ -844,7 +849,7 @@ namespace SWE {
             if (ch == '\\') ch = '/';
         if (p.rfind("data/", 0) == 0) p.erase(0, 5);
         if (p.rfind("textures/", 0) != 0)
-            spdlog::warn("[SWE] OverlayMgr: unexpected path '{}' (expected to start with textures/)", p);
+            spdlog::warn("OverlayMgr: unexpected path '{}' (expected to start with textures/)", p);
         return p;
     }
 
@@ -866,7 +871,7 @@ namespace SWE {
             for (auto& s : bodyAll)
                 if (IsSpecPath(s)) bodySpec.push_back(s);
             st.chosenBody = pick_random(bodySpec);
-            if (st.chosenBody.empty()) spdlog::warn("[SWE] No *_s.dds for BODY found in {}", (base / "body").string());
+            if (st.chosenBody.empty()) spdlog::warn("No *_s.dds for BODY found in {}", (base / "body").string());
         }
         if (_useHand) {
             auto handAll = list_dds(base / "hand");
@@ -874,7 +879,7 @@ namespace SWE {
             for (auto& s : handAll)
                 if (IsSpecPath(s)) handSpec.push_back(s);
             st.chosenHand = pick_random(handSpec);
-            if (st.chosenHand.empty()) spdlog::warn("[SWE] No *_s.dds for HAND found in {}", (base / "hand").string());
+            if (st.chosenHand.empty()) spdlog::warn("No *_s.dds for HAND found in {}", (base / "hand").string());
         }
     }
 
@@ -935,7 +940,7 @@ namespace SWE {
             _aum->AddOverlayUpdate(a->GetFormID());
             _aum->Flush();
         }
-        spdlog::debug("[SWE] applyToActor: applied third={}, first={} (actor={:08X})", c3, c1, a->GetFormID());
+        spdlog::debug("applyToActor: applied third={}, first={} (actor={:08X})", c3, c1, a->GetFormID());
     }
 
     void OverlayMgr::clearActor(RE::Actor* a, ActorState& st, bool resetDiffuse) {
@@ -973,7 +978,7 @@ namespace SWE {
         if (fs::exists(dir, ec)) {
             fs::remove_all(dir, ec);
             if (ec) {
-                spdlog::warn("[SWE] ClearCache: remove_all failed: {}", ec.message());
+                spdlog::warn("ClearCache: remove_all failed: {}", ec.message());
             }
         }
 
@@ -981,11 +986,11 @@ namespace SWE {
             ec.clear();
             fs::create_directories(dir, ec);
             if (ec) {
-                spdlog::warn("[SWE] ClearCache: create_directories failed: {}", ec.message());
+                spdlog::warn("ClearCache: create_directories failed: {}", ec.message());
             }
         }
 
-        spdlog::info("[SWE] ClearCache: cache folder reset ({})", removeDir ? "removed" : "emptied");
+        spdlog::info("ClearCache: cache folder reset ({})", removeDir ? "removed" : "emptied");
     }
 
     void SWE::OverlayMgr::ApplyMergedIfStillRelevant(RE::FormID actorFID, const std::string& baseSpecGame,
@@ -1071,7 +1076,7 @@ namespace SWE {
                 _aum->AddOverlayUpdate(actorFID);
                 _aum->Flush();
             }
-            spdlog::debug("[SWE] Applied async merged spec '{}' (bucket={}) to {} geoms (actor={:08X})", mergedGame,
+            spdlog::debug("Applied async merged spec '{}' (bucket={}) to {} geoms (actor={:08X})", mergedGame,
                           wetBucket, total, actorFID);
         }
     }
@@ -1110,9 +1115,9 @@ namespace SWE {
                 }
             }
             if (st.baseSpecBody.empty())
-                spdlog::debug("[SWE] No base spec snapshot found; will continue with wet only.");
+                spdlog::debug("No base spec snapshot found; will continue with wet only.");
             else
-                spdlog::debug("[SWE] Base spec snapshot = '{}'", st.baseSpecBody);
+                spdlog::debug("Base spec snapshot = '{}'", st.baseSpecBody);
         }
 
         const int wetBucket = QuantizeWet(skinWet01);
@@ -1173,12 +1178,14 @@ namespace SWE {
 
             if (total > 0) {
                 st.lastAppliedSpecBody = mergedGame;
-                spdlog::debug("[SWE] Applied spec '{}' (bucket={}) to {} geoms", mergedGame, wetBucket, total);
+                spdlog::debug("Applied spec '{}' (bucket={}) to {} geoms", mergedGame, wetBucket, total);
             }
         }
 
-        const float gloss = std::clamp(60.0f + skinWet01 * 200.0f, Settings::minGlossiness.load(), Settings::maxGlossiness.load());
-        const float spec = std::clamp(0.90f + skinWet01 * Settings::specularScaleBoost.load(), Settings::minSpecularStrength.load(), Settings::maxSpecularStrength.load());
+        const float gloss =
+            std::clamp(60.0f + skinWet01 * 200.0f, Settings::minGlossiness.load(), Settings::maxGlossiness.load());
+        const float spec = std::clamp(0.90f + skinWet01 * Settings::specularScaleBoost.load(),
+                                      Settings::minSpecularStrength.load(), Settings::maxSpecularStrength.load());
 
         auto setPBR = [&](RE::NiAVObject* root) {
             if (!root) return;
@@ -1265,12 +1272,13 @@ namespace SWE {
 
     std::string OverlayMgr::BuildMergedSpecSync(const std::string& key, const std::string& baseSpecGame,
                                                 const std::string& wetSpecGame, int wetBucket) {
+        spdlog::info("Merge: ENTER key='{}'", key);
         std::error_code ec;
         const fs::path outDir = fs::path("Data/Textures/DynamicWetness/_cache");
         fs::create_directories(outDir, ec);
 
         auto fallbackWet = [&](const char* why) -> std::string {
-            spdlog::warn("[SWE] Merge: fallback ({}) -> using wet-only copy", why ? why : "unknown");
+            spdlog::warn("Merge: fallback ({}) -> using wet-only copy", why ? why : "unknown");
             fs::path src = "Data";
             src /= (wetSpecGame.rfind("textures/", 0) == 0 ? wetSpecGame : ("textures/" + wetSpecGame));
             auto dst = outDir / ("spec_wetonly_" + std::to_string(std::hash<std::string>{}(key)) + ".dds");
@@ -1305,9 +1313,11 @@ namespace SWE {
 
         ScratchImage imgBase, imgWet;
         TexMetadata metaB{}, metaW{};
-        if (FAILED(LoadFromDDSFile(toAbs(baseSpecGame).c_str(), DDS_FLAGS_NONE, &metaB, imgBase)))
+        if (FAILED(LoadFromDDSFile(toAbs(baseSpecGame).c_str(), DDS_FLAGS_LEGACY_DWORD | DDS_FLAGS_ALLOW_LARGE_FILES,
+                                   &metaB, imgBase)))
             return fallbackWet("Load(base) failed");
-        if (FAILED(LoadFromDDSFile(toAbs(wetSpecGame).c_str(), DDS_FLAGS_NONE, &metaW, imgWet)))
+        if (FAILED(LoadFromDDSFile(toAbs(wetSpecGame).c_str(), DDS_FLAGS_LEGACY_DWORD | DDS_FLAGS_ALLOW_LARGE_FILES,
+                                   &metaW, imgWet)))
             return fallbackWet("Load(wet) failed");
 
         ScratchImage baseLinear, wetLinear;
@@ -1336,11 +1346,14 @@ namespace SWE {
         TEX_FILTER_FLAGS baseFilter = TEX_FILTER_DEFAULT;
         TEX_FILTER_FLAGS wetFilter = TEX_FILTER_DEFAULT;
 
+        auto needBaseConvert = (mb.format != kFmt);
+        auto needWetConvert = (mw.format != kFmt);
+
         if (IsSRGB(mb.format) || IsSRGB(kFmt)) baseFilter = static_cast<TEX_FILTER_FLAGS>(baseFilter | TEX_FILTER_SRGB);
         if (IsSRGB(mw.format) || IsSRGB(kFmt)) wetFilter = static_cast<TEX_FILTER_FLAGS>(wetFilter | TEX_FILTER_SRGB);
 
         auto save_wetonly_expanded = [&](const char* why) -> std::string {
-            spdlog::warn("[SWE] Merge: fallback ({} -> expanding wet alpha->RGB)", why ? why : "unknown");
+            spdlog::warn("Merge: fallback ({} -> expanding wet alpha->RGB)", why ? why : "unknown");
 
             ScratchImage wetOnlyRGBA;
             if (FAILED(Convert(wetSrc->GetImages(), wetSrc->GetImageCount(), mw, kFmt, wetFilter, TEX_THRESHOLD_DEFAULT,
@@ -1397,45 +1410,43 @@ namespace SWE {
             return gameRel;
         };
 
-        if (IsCompressed(metaB.format)) {
-            if (FAILED(Decompress(imgBase.GetImages(), imgBase.GetImageCount(), metaB, DXGI_FORMAT_R8G8B8A8_UNORM,
-                                  baseLinear)))
-                return fallbackWet("Decompress(base) failed");
-            baseSrc = &baseLinear;
-        }
-        if (IsCompressed(metaW.format)) {
-            if (FAILED(Decompress(imgWet.GetImages(), imgWet.GetImageCount(), metaW, DXGI_FORMAT_R8G8B8A8_UNORM,
-                                  wetLinear)))
-                return fallbackWet("Decompress(wet) failed");
-            wetSrc = &wetLinear;
-        }
+        const Image* bi = baseRGBA.GetImage(0, 0, 0);
+        const Image* wi = wetRGBA.GetImage(0, 0, 0);
 
-        const Image* bi = nullptr;
-        if (mb.format == kFmt) {
+        if (!needBaseConvert) {
             bi = baseSrc->GetImage(0, 0, 0);
         } else {
-            HRESULT hrB = Convert(baseSrc->GetImages(), baseSrc->GetImageCount(), mb, kFmt, baseFilter,
-                                  TEX_THRESHOLD_DEFAULT, baseRGBA);
-            if (FAILED(hrB)) {
-                spdlog::warn("[SWE] Convert(base) failed hr=0x{:08X} (fmt={}, w={}, h={}, mips={})", (uint32_t)hrB,
-                             (int)mb.format, mb.width, mb.height, mb.mipLevels);
+            HRESULT hr = Convert(baseSrc->GetImages(), baseSrc->GetImageCount(), mb, kFmt, baseFilter,
+                                 TEX_THRESHOLD_DEFAULT, baseRGBA);
+            if (FAILED(hr)) {
+                spdlog::error("Convert(base) hr=0x{:08X} fmt={} {}x{}", (uint32_t)hr, (int)mb.format, mb.width,
+                              mb.height);
                 return save_wetonly_expanded("Convert(base) failed");
             }
             bi = baseRGBA.GetImage(0, 0, 0);
         }
 
-        const Image* wImg = nullptr;
-        if (mw.format == kFmt) {
-            wImg = wetSrc->GetImage(0, 0, 0);
+        if (!needWetConvert) {
+            wi = wetSrc->GetImage(0, 0, 0);
         } else {
-            HRESULT hrW = Convert(wetSrc->GetImages(), wetSrc->GetImageCount(), mw, kFmt, wetFilter,
-                                  TEX_THRESHOLD_DEFAULT, wetRGBA);
-            if (FAILED(hrW)) {
-                spdlog::warn("[SWE] Convert(wet) failed hr=0x{:08X} (fmt={}, w={}, h={}, mips={})", (uint32_t)hrW,
-                             (int)mw.format, mw.width, mw.height, mw.mipLevels);
+            HRESULT hr = Convert(wetSrc->GetImages(), wetSrc->GetImageCount(), mw, kFmt, wetFilter,
+                                 TEX_THRESHOLD_DEFAULT, wetRGBA);
+            if (FAILED(hr)) {
+                spdlog::error("Convert(wet) hr=0x{:08X} fmt={} {}x{}", (uint32_t)hr, (int)mw.format, mw.width,
+                              mw.height);
                 return fallbackWet("Convert(wet) failed");
             }
-            wImg = wetRGBA.GetImage(0, 0, 0);
+            wi = wetRGBA.GetImage(0, 0, 0);
+        }
+
+        ScratchImage wetResized;
+        const Image* wImg = wi;
+        if (wi->width != bi->width || wi->height != bi->height) {
+            if (FAILED(Resize(wetRGBA.GetImages(), wetRGBA.GetImageCount(), wetRGBA.GetMetadata(), bi->width,
+                              bi->height, TEX_FILTER_DEFAULT, wetResized))) {
+                return save_wetonly_expanded("Resize(wet->base) failed");
+            }
+            wImg = wetResized.GetImage(0, 0, 0);
         }
 
         {
@@ -1509,6 +1520,7 @@ namespace SWE {
                 return fallbackWet("Save(out) failed");
             }
         }
+        spdlog::info("Merge: wrote '{}'", outPath.string());
 
         std::string gameRel = outPath.generic_string();
         std::transform(gameRel.begin(), gameRel.end(), gameRel.begin(), ::tolower);

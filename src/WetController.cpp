@@ -680,11 +680,11 @@ namespace SWE {
 
 #if SWE_WF_DEBUG
         logger::info(
-            "[SWE] WF cand: {:08X} hardName={} auxName={} particleOnly={} H={:.1f} ED='{}' MD='{}'",
+            "WF cand: {:08X} hardName={} auxName={} particleOnly={} H={:.1f} ED='{}' MD='{}'",
             r->GetFormID(), (int)hardName, (int)auxName, (int)particleOnly, H, ed ? ed : "",
             model ? model : "");
         if (match) {
-            logger::info("[SWE] WF MATCH: {:08X} ED='{}' MD='{}'", r->GetFormID(), ed ? ed : "", model ? model : "");
+            logger::info("WF MATCH: {:08X} ED='{}' MD='{}'", r->GetFormID(), ed ? ed : "", model ? model : "");
         }
 #endif
 
@@ -1093,7 +1093,7 @@ namespace SWE {
                             if (auto* tm = base ? base->As<RE::TESModel>() : nullptr) mdl = tm->GetModel();
 
                             logger::info(
-                                "[SWE] WF scan: {:08X} FT={} ED='{}' MD='{}' 3D={} plausible={}",
+                                "WF scan: {:08X} FT={} ED='{}' MD='{}' 3D={} plausible={}",
                                 ref.GetFormID(), base ? (int)base->GetFormType() : -1, ed ? ed : "", mdl ? mdl : "",
                                 ref.Is3DLoaded(), (int)plausible);
                         }
@@ -1121,7 +1121,7 @@ namespace SWE {
 
 #if SWE_WF_DEBUG
                         if (inside) {
-                            logger::info("[SWE] WF inside: {:08X}", ref.GetFormID());
+                            logger::info("WF inside: {:08X}", ref.GetFormID());
                         }
 #endif
 
