@@ -3,16 +3,12 @@
 #include <algorithm>
 #include <cctype>
 
-#define SWE_USE_DIRECTX_TEX 1
-
-#if defined(SWE_USE_DIRECTX_TEX)
-    #include <DirectXTex.h>
-using namespace DirectX;
-#endif
-
 #include "RE/B/BSLightingShaderMaterialBase.h"
 #include "RE/B/BSTextureSet.h"
 #include "Settings.h"
+
+#include <DirectXTex.h>
+using namespace DirectX;
 
 using std::string;
 using std::vector;
@@ -1273,6 +1269,7 @@ namespace SWE {
     std::string OverlayMgr::BuildMergedSpecSync(const std::string& key, const std::string& baseSpecGame,
                                                 const std::string& wetSpecGame, int wetBucket) {
         spdlog::info("Merge: ENTER key='{}'", key);
+
         std::error_code ec;
         const fs::path outDir = fs::path("Data/Textures/DynamicWetness/_cache");
         fs::create_directories(outDir, ec);
@@ -1311,15 +1308,28 @@ namespace SWE {
             return p;
         };
 
+    #ifdef SWE_MERGE_TRACE
+        spdlog::debug("Merge[{}]: toAbs base='{}' wet='{}'", key, toAbs(baseSpecGame).string(),
+                      toAbs(wetSpecGame).string());
+    #endif
+
         ScratchImage imgBase, imgWet;
         TexMetadata metaB{}, metaW{};
+    #ifdef SWE_MERGE_TRACE
+        spdlog::debug("Merge[{}]: Load(base)...", key);
+    #endif
         if (FAILED(LoadFromDDSFile(toAbs(baseSpecGame).c_str(), DDS_FLAGS_LEGACY_DWORD | DDS_FLAGS_ALLOW_LARGE_FILES,
                                    &metaB, imgBase)))
             return fallbackWet("Load(base) failed");
+    #ifdef SWE_MERGE_TRACE
+        spdlog::debug("Merge[{}]: Load(wet)...", key);
+    #endif
         if (FAILED(LoadFromDDSFile(toAbs(wetSpecGame).c_str(), DDS_FLAGS_LEGACY_DWORD | DDS_FLAGS_ALLOW_LARGE_FILES,
                                    &metaW, imgWet)))
             return fallbackWet("Load(wet) failed");
-
+    #ifdef SWE_MERGE_TRACE
+        spdlog::debug("Merge[{}]: Decompress? baseFmt={} wetFmt={}", key, (int)metaB.format, (int)metaW.format);
+    #endif
         ScratchImage baseLinear, wetLinear;
         const ScratchImage* baseSrc = &imgBase;
         const ScratchImage* wetSrc = &imgWet;
@@ -1337,6 +1347,9 @@ namespace SWE {
             wetSrc = &wetLinear;
         }
 
+    #ifdef SWE_MERGE_TRACE
+        spdlog::debug("Merge[{}]: Convert->Resize…", key);
+    #endif
         const DXGI_FORMAT kFmt = DXGI_FORMAT_R8G8B8A8_UNORM;
         ScratchImage baseRGBA, wetRGBA;
 
@@ -1504,6 +1517,14 @@ namespace SWE {
         }
 
         HRESULT hr = E_FAIL;
+    #ifdef SWE_NO_BC7
+        spdlog::warn("Merge: BC7 disabled (SWE_NO_BC7) -> writing uncompressed RGBA");
+        hr = SaveToDDSFile(outImg.GetImages(), outImg.GetImageCount(), outImg.GetMetadata(), DDS_FLAGS_FORCE_DX10_EXT,
+                           outPath.c_str());
+        if (FAILED(hr)) {
+            return fallbackWet("Save(out, RGBA) failed");
+        }
+    #else
         {
             ScratchImage bc7;
             hr = Compress(outImg.GetImages(), outImg.GetImageCount(), outImg.GetMetadata(), DXGI_FORMAT_BC7_UNORM,
@@ -1514,12 +1535,14 @@ namespace SWE {
             }
         }
         if (FAILED(hr)) {
+            spdlog::warn("Merge: BC7 compress/save failed -> writing uncompressed RGBA");
             hr = SaveToDDSFile(outImg.GetImages(), outImg.GetImageCount(), outImg.GetMetadata(),
                                DDS_FLAGS_FORCE_DX10_EXT, outPath.c_str());
             if (FAILED(hr)) {
-                return fallbackWet("Save(out) failed");
+                return fallbackWet("Save(out, RGBA) failed");
             }
         }
+    #endif
         spdlog::info("Merge: wrote '{}'", outPath.string());
 
         std::string gameRel = outPath.generic_string();

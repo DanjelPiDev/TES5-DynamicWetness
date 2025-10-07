@@ -80,8 +80,6 @@ static void RequestRMInterfaces() {
 
 static void OnSKSEMessage(SKSE::MessagingInterface::Message* msg) {
     if (!msg || !msg->sender) return;
-
-    // RaceMenu/SKEE senden das Interface-Map-Event
     const bool fromNiOverride = std::strcmp(msg->sender, "NiOverride") == 0 || std::strcmp(msg->sender, "SKEE") == 0 ||
                                 std::strcmp(msg->sender, "RaceMenu") == 0;
 

@@ -9,6 +9,11 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
 
+option(SWE_USE_DIRECTX_TEX "Enable DirectXTex for texture processing" ON)
+option(SWE_MERGE_TRACE "Verbose step-by-step logging inside BuildMergedSpecSync" ON)
+option(SWE_FORCE_WETONLY_EXPANDED "Bypass merge: expand wet alpha->RGB and save" OFF)
+option(SWE_NO_BC7 "Disable BC7 compression for merged specs (debug/testing)" OFF)
+
 include(GNUInstallDirs)
 
 set(BUILD_NAME "Release")
@@ -88,7 +93,10 @@ target_link_libraries(${PROJECT_NAME}
 
 target_compile_definitions(${PROJECT_NAME}
   PRIVATE
-    SWE_USE_DIRECTX_TEX
+    $<$<BOOL:${SWE_USE_DIRECTX_TEX}>:SWE_USE_DIRECTX_TEX>
+    $<$<BOOL:${SWE_MERGE_TRACE}>:SWE_MERGE_TRACE>
+    $<$<BOOL:${SWE_FORCE_WETONLY_EXPANDED}>:SWE_FORCE_WETONLY_EXPANDED>
+    $<$<BOOL:${SWE_NO_BC7}>:SWE_NO_BC7>
 )
 
 if (MSVC)
